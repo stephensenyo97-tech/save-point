@@ -279,6 +279,43 @@
     render(); renderBanners();
   }
 
+  // ───────────────────────── built-in game list (autocomplete) ─────────────────────────
+  const normKey = (t) => String(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const CATALOG = (() => {
+    const map = new Map();
+    String(window.SP_CATALOG_TEXT || '').split('\n').forEach((line) => {
+      line = line.trim(); if (!line || line[0] === '#') return;
+      const i = line.indexOf('|'); const title = (i < 0 ? line : line.slice(0, i)).trim(); if (!title) return;
+      const plats = (i < 0 ? '' : line.slice(i + 1)).split(/[\s,]+/).filter((p) => PLATFORMS.includes(p) && p !== 'Other');
+      const key = normKey(title); if (!key) return;
+      const cur = map.get(key) || { title, key, plats: [] };
+      plats.forEach((p) => { if (!cur.plats.includes(p)) cur.plats.push(p); });
+      map.set(key, cur);
+    });
+    return [...map.values()];
+  })();
+  function searchCatalog(q) {
+    const k = normKey(q); if (k.length < 2) return [];
+    const words = k.split(' ');
+    const scored = [];
+    for (const g of CATALOG) {
+      let score;
+      if (g.key.startsWith(k)) score = 0;
+      else if (g.key.split(' ').some((w) => w.startsWith(words[0])) && words.every((w) => g.key.includes(w))) score = 1;
+      else if (words.every((w) => g.key.includes(w))) score = 2;
+      else continue;
+      if (g.key === k) continue; // already typed in full
+      scored.push([score, g.key.length, g]);
+    }
+    scored.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    return scored.slice(0, 6).map((x) => x[2]);
+  }
+  function showSuggestions(form) {
+    const box = $('#sugg'); if (!box) return;
+    const hits = searchCatalog(form.elements.title.value);
+    box.innerHTML = hits.map((g) => `<button type="button" class="sugg-item" data-act="pick-sugg" data-t="${esc(g.title)}" data-p="${esc(g.plats.join(','))}"><span>${esc(g.title)}</span><small>${esc(g.plats.join(' · '))}</small></button>`).join('');
+  }
+
   // ───────────────────────── UI plumbing ─────────────────────────
   const ui = { libQ: '', libStatus: 'all', libPlat: 'all', libSort: 'recent', jQ: '', jType: 'all', gType: 'all' };
   let toastTimer = null;
@@ -520,7 +557,8 @@
     const sh = openSheet(`<h2>${isEdit ? 'Edit game' : 'Add game'}</h2>
       <form id="gameForm" autocomplete="off">
         <label class="f" for="gTitle">TITLE</label>
-        <input id="gTitle" name="title" type="text" required maxlength="200" value="${esc(g.title)}" placeholder="e.g. Elden Ring" autocapitalize="words" enterkeyhint="done">
+        <input id="gTitle" name="title" type="text" required maxlength="200" value="${esc(g.title)}" placeholder="Type to search popular games…" autocapitalize="words" enterkeyhint="done">
+        <div id="sugg" class="sugg"></div>
         <label class="f">PLATFORM</label>
         ${radios('platform', PLATFORMS.map((p) => ({ id: p, label: p })), sel)}
         <input id="gOther" name="other" type="text" maxlength="40" placeholder="Which platform?" value="${known ? '' : esc(g.platform === 'Other' ? '' : g.platform)}" style="margin-top:10px" ${sel === 'Other' ? '' : 'hidden'}>
@@ -532,6 +570,7 @@
       </form>`);
     const form = $('#gameForm', sh), F = form.elements;
     form.addEventListener('input', (e) => {
+      if (e.target.name === 'title') showSuggestions(form);
       if (e.target.name === 'progress') $('#gProgOut', sh).textContent = e.target.value + '%';
       if (e.target.name === 'platform') $('#gOther', sh).hidden = e.target.value !== 'Other';
     });
@@ -587,6 +626,16 @@
   const actions = {
     'close-sheet': () => closeSheet(),
     'add-game': () => gameForm(),
+    'pick-sugg': (t) => {
+      const form = $('#gameForm'); if (!form) return; const F = form.elements;
+      F.title.value = t.dataset.t; $('#sugg').innerHTML = '';
+      const plats = (t.dataset.p || '').split(',').filter(Boolean);
+      if (plats.length) {
+        const cur = F.platform.value;
+        const pick = plats.includes(cur) && cur !== 'Other' ? cur : plats[0];
+        const r = [...F.platform].find((x) => x.value === pick); if (r) { r.checked = true; $('#gOther').hidden = true; }
+      }
+    },
     'edit-game': (t) => gameForm(gameById(t.dataset.id)),
     'del-game': async (t) => {
       const g = gameById(t.dataset.id); if (!g) return; const n = notesOf(g.id).length;

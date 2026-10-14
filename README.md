@@ -2,7 +2,7 @@
 
 A private gaming journal that installs on your iPhone Home Screen. No account, no subscription, no server of yours.
 
-Files: `index.html`, `styles.css`, `app.js`, `sw.js` (offline), `manifest.json` (installability), `icons/`.
+Files: `index.html`, `styles.css`, `app.js`, `games-catalog.js` (built-in game list), `sw.js` (offline), `manifest.json` (installability), `icons/`.
 
 ---
 
@@ -47,7 +47,18 @@ Games and notes are saved on the phone in the browser's **IndexedDB** after ever
 - Fallbacks: *Copy as text* / *Import pasted text* if file sharing misbehaves.
 - The app reminds you if you've never backed up or have 10+ unsaved-to-backup changes.
 
-## 6. What was tested (and what wasn't)
+## 6. Game list (autocomplete) and how to update it
+
+When you add a game, type a few letters and tap a suggestion to fill in the title and platform. The list lives in `games-catalog.js`: about 700 popular PS5/PS4/PC/Xbox/Switch titles. It is a convenience list, not a complete database, and you can always type any title yourself.
+
+To add games or fix platforms:
+1. On GitHub open your repo → click `games-catalog.js` → click the **pencil icon** (Edit).
+2. Add one line per game, e.g. `Some New Game | PS5 PC`. (Platforms: PS5 PS4 PC Xbox Switch Mobile.)
+3. Click **Commit changes**.
+4. Open `sw.js`, click the pencil, and change `const VERSION = 'v2';` to `'v3'` (then `'v4'` next time, and so on). Commit. **This step is what makes phones download the new list.**
+5. On your iPhone, open Save Point while online, close it fully, and open it again. Your journal data is not touched by updates.
+
+## 7. What was tested (and what wasn't)
 
 Tested in headless Chromium at iPhone size, served from a sub-folder like GitHub Pages does: installing the service worker; opening the app with the server completely stopped; adding/editing/deleting games and notes while offline; data surviving reloads; export → wipe all browser data → import restores everything exactly; merge, replace, undo, erase; rejecting bad/hostile backup files; recovery from the localStorage copy if IndexedDB is lost.
 
