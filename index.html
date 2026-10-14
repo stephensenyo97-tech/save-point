@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Save Point</title>
+<meta name="description" content="Save Point – a private gaming journal that lives on your phone.">
+<meta name="theme-color" content="#060a13">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Save Point">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <button id="backBtn" class="icon-btn" aria-label="Back" hidden></button>
+    <h1 id="title">Save Point</h1>
+  </header>
+  <div id="banners"></div>
+  <main id="view" tabindex="-1"></main>
+</div>
+<button id="fab" class="fab" hidden></button>
+<nav id="tabs" aria-label="Main"></nav>
+<div id="toast" role="status" aria-live="polite"></div>
+<noscript><p style="padding:24px;color:#e8f0ff;font-family:sans-serif">Save Point needs JavaScript to run.</p></noscript>
+<script src="app.js"></script>
+</body>
+</html>
