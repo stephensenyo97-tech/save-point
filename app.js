@@ -6,7 +6,10 @@
   // ───────────────────────── constants ─────────────────────────
   const DB_NAME = 'save-point', STORE = 'kv', KEY = 'state', UNDO_KEY = 'undo';
   const LS_MIRROR = 'savepoint.mirror.v1', LS_UNDO = 'savepoint.undo.v1', LS_DRAFT = 'savepoint.draft.';
-  const FORMAT = 1;
+  const FORMAT = 2;
+  const APP_VERSION = 'v4.1';
+  const COVERS_KEY = 'covers';
+  const LS_PREF = 'savepoint.pickplat';
   const PLATFORMS = ['PS5', 'PS4', 'PC', 'Xbox', 'Switch', 'Mobile', 'Other'];
   const STATUSES = [
     { id: 'want', label: 'Want to Play' }, { id: 'playing', label: 'Playing' },
@@ -46,6 +49,9 @@
     copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 00-1-1H5a1 1 0 00-1 1v10a1 1 0 001 1h3"/>',
     share: '<path d="M12 16V3"/><path d="M7 8l5-5 5 5"/><path d="M5 12v8h14v-8"/>',
     upload: '<path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 19h16"/>',
+    stats: '<path d="M5 20V11M12 20V4M19 20v-6"/>',
+    heart: '<path d="M12 20s-7-4.5-7-10a4 4 0 017-2.6A4 4 0 0119 10c0 5.5-7 10-7 10z"/>',
+    next: '<path d="M5 5l9 7-9 7z"/><path d="M19 5v14"/>',
     pad: '<path d="M6 8h12a4 4 0 014 4v2a3 3 0 01-5.4 1.8L15 14H9l-1.6 1.8A3 3 0 012 14v-2a4 4 0 014-4z"/><path d="M7 11v2M6 12h2M16 11.5h.01M18 12.5h.01"/>'
   };
   const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
@@ -65,6 +71,10 @@
       platform: str(g.platform, 40).trim() || 'Other',
       status: STATUSES.some((s) => s.id === g.status) ? g.status : 'want',
       progress: Math.min(100, Math.max(0, Math.round(num(g.progress, 0)))),
+      rating: Math.min(10, Math.max(0, Math.round(num(g.rating, 0)))),
+      fav: g.fav === true, queue: Math.max(0, num(g.queue === true ? Date.now() : g.queue, 0)),
+      startedAt: /^\d{4}-\d{2}-\d{2}$/.test(g.startedAt || '') ? g.startedAt : '',
+      finishedAt: /^\d{4}-\d{2}-\d{2}$/.test(g.finishedAt || '') ? g.finishedAt : '',
       createdAt: num(g.createdAt, Date.now()), updatedAt: num(g.updatedAt, Date.now())
     };
   }
@@ -97,6 +107,7 @@
   let db = null;
   const storage = { mode: 'none', idbOk: false, lsOk: false, lastSavedAt: null, persisted: null, lastError: '' };
   let state = freshState();
+  let covers = Object.create(null); // gameId -> small JPEG data URL (your own photos), kept in IndexedDB
 
   function openDB() {
     return new Promise((resolve, reject) => {
@@ -134,6 +145,7 @@
     try {
       db = await openDB();
       storage.mode = 'indexeddb';
+      try { covers = cleanCovers(await idbGet(COVERS_KEY)); } catch (e) { covers = Object.create(null); }
       const saved = await idbGet(KEY);
       if (saved) { state = normalizeState(saved); storage.idbOk = true; return; }
       const mirror = readMirror(); // IndexedDB empty but mirror exists → recover from it
@@ -162,7 +174,7 @@
     return run;
   }
   async function stashUndo(label) {
-    const rec = { at: Date.now(), label, state: JSON.parse(JSON.stringify(state)) };
+    const rec = { at: Date.now(), label, state: JSON.parse(JSON.stringify(state)), covers: Object.assign({}, covers) };
     let ok = false;
     if (db) { try { await idbPut(UNDO_KEY, rec); ok = true; } catch (e) { /* fall through */ } }
     if (!ok) ok = lsSet(LS_UNDO, JSON.stringify(rec));
@@ -195,12 +207,26 @@
     renderBanners();
   }
   const gameById = (id) => state.games.find((g) => g.id === id);
+  /** Change a game's status and keep the started/finished dates and Up-next list in step. */
+  function applyStatus(g, v) {
+    const prev = g.status, t = todayStr();
+    g.status = v;
+    if (v === 'playing' && !g.startedAt) g.startedAt = t;
+    if (v === 'finished') { g.progress = 100; if (!g.finishedAt) g.finishedAt = t; } else if (prev === 'finished') g.finishedAt = '';
+    if (v === 'playing' || v === 'finished') g.queue = 0;
+    g.updatedAt = Date.now();
+  }
+  function newGame(base) {
+    const g = Object.assign({ id: uid(), title: '', platform: 'Other', status: 'want', progress: 0, rating: 0, fav: false, queue: 0, startedAt: '', finishedAt: '', createdAt: Date.now(), updatedAt: Date.now() }, base, { status: 'want' });
+    applyStatus(g, base.status || 'want'); g.updatedAt = g.createdAt; return g;
+  }
+  const daysBetween = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
   const notesOf = (id) => state.notes.filter((n) => n.gameId === id);
   const byNewestNote = (a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt);
 
   // ───────────────────────── backup / import ─────────────────────────
   function buildBackup() {
-    return { app: 'save-point', format: FORMAT, exportedAt: new Date().toISOString(), counts: { games: state.games.length, notes: state.notes.length }, games: state.games, notes: state.notes };
+    return { app: 'save-point', format: FORMAT, exportedAt: new Date().toISOString(), counts: { games: state.games.length, notes: state.notes.length, photos: Object.keys(covers).length }, games: state.games, notes: state.notes, covers: Object.assign({}, covers) };
   }
   const backupFilename = () => `save-point-backup-${todayStr()}.json`;
   async function markBackedUp() { state.meta.lastBackupAt = Date.now(); state.meta.changes = 0; render(); try { await save(); } catch (e) { /* ignore */ } renderBanners(); }
@@ -233,16 +259,17 @@
     let obj;
     try { obj = JSON.parse(text); } catch (e) { throw new Error('That is not a valid backup (could not read the data).'); }
     if (!obj || obj.app !== 'save-point' || !Array.isArray(obj.games) || !Array.isArray(obj.notes)) throw new Error('That file is not a Save Point backup.');
+    if (num(obj.format, 1) > FORMAT) throw new Error('This backup was made by a newer version of Save Point. Update the app first (Backup tab → Check for update), then try again.');
     const games = obj.games.map(cleanGame).filter(Boolean);
     const ids = new Set(games.map((g) => g.id));
     const notes = obj.notes.map(cleanNote).filter((n) => n && ids.has(n.gameId));
     const skipped = (obj.games.length - games.length) + (obj.notes.length - notes.length);
-    return { games, notes, skipped, exportedAt: obj.exportedAt || null };
+    return { games, notes, covers: cleanCovers(obj.covers, ids), skipped, exportedAt: obj.exportedAt || null };
   }
   function showImport(parsed) {
     const ts = Date.parse(parsed.exportedAt || ''); const when = ts ? fmtDateTime(ts) : 'an unknown date';
     openSheet(`<h2>Import backup</h2>
-      <p class="muted">Backup made ${esc(when)}: <b>${plural(parsed.games.length, 'game')}</b> and <b>${plural(parsed.notes.length, 'note')}</b>${parsed.skipped ? ` (${parsed.skipped} unreadable item${parsed.skipped === 1 ? '' : 's'} skipped)` : ''}.</p>
+      <p class="muted">Backup made ${esc(when)}: <b>${plural(parsed.games.length, 'game')}</b> and <b>${plural(parsed.notes.length, 'note')}</b>${Object.keys(parsed.covers).length ? ` and <b>${plural(Object.keys(parsed.covers).length, 'photo')}</b>` : ''}${parsed.skipped ? ` (${parsed.skipped} unreadable item${parsed.skipped === 1 ? '' : 's'} skipped)` : ''}.</p>
       <p class="muted small" style="margin-top:10px">Right now you have ${plural(state.games.length, 'game')} and ${plural(state.notes.length, 'note')}. Either choice can be undone from the Backup tab.</p>
       <div class="actions col">
         <button class="btn primary" data-act="do-import" data-mode="merge">Merge with what I have</button>
@@ -258,14 +285,15 @@
     const stashed = await stashUndo(mode === 'replace' ? 'import (replace)' : 'import (merge)');
     let added = 0, updated = 0;
     await mutate((s) => {
-      if (mode === 'replace') { s.games = p.games; s.notes = p.notes; added = p.games.length; }
+      if (mode === 'replace') { s.games = p.games; s.notes = p.notes; added = p.games.length; covers = Object.assign(Object.create(null), p.covers); }
       else {
         const gi = new Map(s.games.map((g) => [g.id, g]));
-        p.games.forEach((g) => { const cur = gi.get(g.id); if (!cur) { s.games.push(g); added++; } else if (g.updatedAt > cur.updatedAt) { Object.assign(cur, g); updated++; } });
+        p.games.forEach((g) => { const cur = gi.get(g.id); if (!cur) { s.games.push(g); added++; if (p.covers[g.id]) covers[g.id] = p.covers[g.id]; } else if (g.updatedAt > cur.updatedAt) { Object.assign(cur, g); updated++; if (p.covers[g.id]) covers[g.id] = p.covers[g.id]; } });
         const ni = new Map(s.notes.map((n) => [n.id, n]));
         p.notes.forEach((n) => { const cur = ni.get(n.id); if (!cur) { s.notes.push(n); } else if (n.updatedAt > cur.updatedAt) { Object.assign(cur, n); } });
       }
     });
+    await saveCovers();
     if (mode === 'replace') { state.meta.changes = 0; try { await save(); } catch (e) { /* reported by next save */ } }
     renderBanners(); render();
     toast(`Imported ${plural(p.games.length, 'game')} and ${plural(p.notes.length, 'note')}${stashed ? '' : ' (undo not available)'}`);
@@ -274,9 +302,180 @@
     const rec = await readUndo(); if (!rec) return toast('Nothing to undo');
     const ok = await confirmBox({ title: 'Undo last import / erase?', message: `This puts your journal back how it was on ${fmtDateTime(rec.at)} (${rec.label}). Anything added since then will be lost.`, okLabel: 'Undo', danger: true });
     if (!ok) return;
-    state = normalizeState(rec.state);
+    state = normalizeState(rec.state); covers = cleanCovers(rec.covers, new Set(state.games.map((g) => g.id))); await saveCovers();
     try { await save(); await clearUndo(); toast('Journal restored'); } catch (e) { toast('⚠ Could not save restored data', true); }
     render(); renderBanners();
+  }
+
+
+  // ───────────────────────── covers (generated, or your own photo) ─────────────────────────
+  const PALETTES = [['#0ea5e9', '#4f46e5'], ['#22d3ee', '#2563eb'], ['#8b5cf6', '#db2777'], ['#14b8a6', '#0369a1'], ['#f59e0b', '#dc2626'], ['#10b981', '#1d4ed8'], ['#6366f1', '#0891b2'], ['#ec4899', '#d97706'], ['#06b6d4', '#7c3aed'], ['#ef4444', '#6d28d9'], ['#84cc16', '#0f766e'], ['#38bdf8', '#9333ea']];
+  const hash32 = (str) => { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; };
+  const coverInitials = (title) => {
+    const words = normKey(title).split(' ').filter((w) => w && !['the', 'of', 'a', 'an', 'and', 's'].includes(w));
+    const pick = words.slice(0, 3).map((w) => (/^\d+$/.test(w) ? w.slice(0, 2) : w[0])).join('').toUpperCase();
+    return pick.slice(0, 3) || '?';
+  };
+  function coverPattern(kind, m) {
+    let o = '';
+    if (kind === 0) for (let i = -400; i < 400; i += 30 * m) o += `<path d="M${i} 0L${i + 400} 400" stroke="#fff" stroke-width="${9 * m}"/>`;
+    else if (kind === 1) for (let r = 40; r < 460; r += 46 * m) o += `<circle cx="250" cy="90" r="${r}" fill="none" stroke="#fff" stroke-width="${4 * m}"/>`;
+    else if (kind === 2) for (let y = 20; y < 400; y += 34 * m) for (let x = 20; x < 300; x += 34 * m) o += `<circle cx="${x}" cy="${y}" r="${3.5 * m}" fill="#fff"/>`;
+    else if (kind === 3) for (let y = -20; y < 420; y += 70 * m) o += `<path d="M0 ${y}L150 ${y + 60}L300 ${y}L300 ${y + 24 * m}L150 ${y + 84}L0 ${y + 24 * m}Z" fill="#fff"/>`;
+    else if (kind === 4) o += '<path d="M0 250L300 110V400H0Z" fill="#fff" opacity=".7"/><path d="M0 200L300 60V90L0 230Z" fill="#fff"/>';
+    else for (let y = 30; y < 420; y += 48 * m) o += `<path d="M0 ${y}Q75 ${y - 44} 150 ${y}T300 ${y}" fill="none" stroke="#fff" stroke-width="${5 * m}"/>`;
+    return o;
+  }
+  function coverLines(title, fs, maxW) {
+    const cw = fs * 0.6, per = Math.max(4, Math.floor(maxW / cw)), lines = []; let cur = '';
+    String(title).split(/\s+/).forEach((w) => {
+      while (w.length > per) { if (cur) { lines.push(cur); cur = ''; } lines.push(w.slice(0, per - 1) + '-'); w = w.slice(per - 1); }
+      const t = cur ? cur + ' ' + w : w; if (t.length <= per) cur = t; else { lines.push(cur); cur = w; }
+    });
+    if (cur) lines.push(cur); return lines;
+  }
+  /** A clean generated cover. Same title → same cover, always. kind 'full' (title on it) or 'thumb' (initials only). */
+  function coverSVG(title, platform, kind) {
+    const SF = FONT.replace(/"/g, "'");
+    const h = hash32(normKey(title)), pal = PALETTES[h % PALETTES.length], pat = (h >>> 8) % 6, rot = 25 + ((h >>> 16) % 70), id = 'cv' + h.toString(36);
+    const full = kind === 'full', ini = coverInitials(title);
+    let body = `<defs><linearGradient id="${id}" gradientTransform="rotate(${rot} .5 .5)"><stop offset="0" stop-color="${pal[0]}"/><stop offset="1" stop-color="${pal[1]}"/></linearGradient><linearGradient id="${id}s" x1="0" y1="0" x2="0" y2="1"><stop offset=".45" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".72"/></linearGradient></defs>`;
+    body += `<rect width="300" height="400" fill="url(#${id})"/><g opacity="${full ? .16 : .2}">${coverPattern(pat, full ? 1 : 2)}</g>`;
+    if (full) {
+      body += `<text x="150" y="238" text-anchor="middle" font-family="${SF}" font-weight="900" font-size="${ini.length > 2 ? 125 : 190}" fill="#fff" opacity=".14">${esc(ini)}</text><rect width="300" height="400" fill="url(#${id}s)"/>`;
+      let fs = 36, lines = coverLines(title, fs, 252); while ((lines.length > 4 || lines.length * fs * 1.12 > 190) && fs > 20) { fs -= 2; lines = coverLines(title, fs, 252); }
+      lines = lines.slice(0, 5); const y0 = 372 - (lines.length - 1) * fs * 1.12;
+      body += lines.map((l, i) => `<text x="24" y="${(y0 + i * fs * 1.12).toFixed(1)}" font-family="${SF}" font-weight="800" font-size="${fs}" fill="#fff">${esc(l)}</text>`).join('');
+      const plat = String(platform || '').toUpperCase().slice(0, 14);
+      body += `<path d="M30 40l12 16-12 16-12-16z" fill="#fff" opacity=".9"/><text x="54" y="62" font-family="${SF}" font-weight="800" font-size="19" letter-spacing="3" fill="#fff" opacity=".9">${esc(plat)}</text>`;
+    } else {
+      body += `<text x="150" y="250" text-anchor="middle" font-family="${SF}" font-weight="900" font-size="${ini.length > 2 ? 88 : 140}" fill="#fff">${esc(ini)}</text>`;
+    }
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400" preserveAspectRatio="xMidYMid slice" role="img" aria-label="${esc(title)} cover" class="cv">${body}</svg>`;
+  }
+  const coverHTML = (g, kind) => (covers[g.id] ? `<img class="cv" src="${covers[g.id]}" alt="${esc(g.title)} cover">` : coverSVG(g.title, g.platform, kind));
+  const thumbFor = (title) => coverSVG(title, '', 'thumb');
+  const COVER_RE = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/;
+  function cleanCovers(raw, ids) {
+    const out = Object.create(null); if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    Object.keys(raw).forEach((k) => { const id = cid(k), v = raw[k]; if ((!ids || ids.has(id)) && typeof v === 'string' && v.length < 700000 && COVER_RE.test(v)) out[id] = v; });
+    return out;
+  }
+  async function saveCovers() {
+    if (!db) return false;
+    try { await idbPut(COVERS_KEY, Object.assign({}, covers)); return true; }
+    catch (e) { toast('⚠ Could not save the photo (device storage full?)', true); return false; }
+  }
+  async function fileToCover(file) {
+    if (file.size > 60 * 1024 * 1024) throw new Error('too big');
+    let src, w, h;
+    try { src = await createImageBitmap(file, { imageOrientation: 'from-image' }); w = src.width; h = src.height; }
+    catch (e) {
+      src = await new Promise((res, rej) => { const u = URL.createObjectURL(file), im = new Image(); im.onload = () => { res(im); setTimeout(() => URL.revokeObjectURL(u), 5000); }; im.onerror = () => rej(new Error('bad image')); im.src = u; });
+      w = src.naturalWidth; h = src.naturalHeight;
+    }
+    if (!w || !h) throw new Error('bad image');
+    const TW = 360, TH = 480, c = document.createElement('canvas'); c.width = TW; c.height = TH;
+    const x = c.getContext('2d'), sc = Math.max(TW / w, TH / h), dw = w * sc, dh = h * sc;
+    x.fillStyle = '#0a1322'; x.fillRect(0, 0, TW, TH); x.drawImage(src, (TW - dw) / 2, (TH - dh) / 2, dw, dh);
+    const url = c.toDataURL('image/jpeg', 0.82); if (!COVER_RE.test(url)) throw new Error('could not encode');
+    return url;
+  }
+  async function setCoverFromFile(id, file) {
+    if (!db) return toast('Photos need device storage, which this browser has blocked', true);
+    try {
+      const url = await fileToCover(file), prev = covers[id]; covers[id] = url;
+      if (!(await saveCovers())) { if (prev) covers[id] = prev; else delete covers[id]; render(); return; }
+      await mutate((s) => { gameById2(s, id).updatedAt = Date.now(); }, 'Cover updated');
+    } catch (e) { toast('Could not use that picture. Try a different one.', true); }
+  }
+  async function clearCover(id) {
+    delete covers[id]; await saveCovers();
+    await mutate((s) => { gameById2(s, id).updatedAt = Date.now(); }, 'Using the generated cover');
+  }
+  function loadImg(url) { return new Promise((res) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = url; }); }
+  async function coverImageFor(g) {
+    if (covers[g.id]) return loadImg(covers[g.id]);
+    const svg = coverSVG(g.title, g.platform, 'full').replace('<svg ', '<svg width="600" height="800" ');
+    return loadImg('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg));
+  }
+
+
+  // ───────────────────────── real cover art, fetched by your phone (optional, needs internet) ─────────────────────────
+  // The app contains no copyrighted art. When you ask, your phone looks the game up on Wikipedia, downloads
+  // the cover thumbnail and keeps a small copy on the device. After that it works offline.
+  const WIKI_API = 'https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrlimit=6&prop=pageimages&piprop=thumbnail&pithumbsize=480&redirects=1&gsrsearch=';
+  const wikiBase = (t) => normKey(String(t).replace(/\s*\([^)]*\)\s*$/, ''));
+  const isGamePage = (t) => { const m = /\(([^)]*)\)\s*$/.exec(String(t)); return !m || /video game/i.test(m[1]); }; // “Hades (mythology)” is not a match
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function timedFetch(url, ms) {
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms || 15000);
+    try { const r = await fetch(url, { signal: ctl.signal, referrerPolicy: 'no-referrer' }); if (!r.ok) throw new Error('HTTP ' + r.status); return r; }
+    finally { clearTimeout(t); }
+  }
+  async function wikiSearch(title) {
+    const j = await (await timedFetch(WIKI_API + encodeURIComponent(title + ' video game'), 12000)).json();
+    const pages = Object.values((j && j.query && j.query.pages) || {}).filter((p) => p && p.thumbnail && typeof p.thumbnail.source === 'string' && /^https:\/\/upload\.wikimedia\.org\//.test(p.thumbnail.source));
+    return pages.sort((a, b) => (a.index || 0) - (b.index || 0)).map((p) => ({ title: String(p.title || '').slice(0, 120), src: p.thumbnail.source }));
+  }
+  async function fetchCoverFor(cand) {
+    if (!/^https:\/\/upload\.wikimedia\.org\//.test(cand.src)) throw new Error('blocked source');
+    return fileToCover(await (await timedFetch(cand.src, 20000)).blob());
+  }
+  let coverCands = [], batch = null;
+  async function findCoverOnline(id) {
+    const g = gameById(id); if (!g) return;
+    openSheet(`<h2>Find cover online</h2><p class="muted small">${esc(g.title)}</p><div id="candBox"><p class="muted" style="margin:18px 0">Searching…</p></div><div class="actions"><button class="btn" data-act="close-sheet">Close</button></div>`);
+    const box = () => $('#candBox');
+    if (navigator.onLine === false) { if (box()) box().innerHTML = '<p class="muted" style="margin:18px 0">You’re offline. Connect to the internet and try again.</p>'; return; }
+    try {
+      coverCands = (await wikiSearch(g.title)).slice(0, 4); coverCands.forEach((c) => { c.gameId = id; });
+      if (!box()) return;
+      box().innerHTML = coverCands.length
+        ? `<p class="muted small" style="margin:10px 0 4px">Tap the right one:</p>` + coverCands.map((c, i) => `<button type="button" class="cand" data-act="use-cand" data-i="${i}"><img src="${esc(c.src)}" alt="" referrerpolicy="no-referrer"><span>${esc(c.title)}</span></button>`).join('')
+        : '<p class="muted" style="margin:18px 0">No cover found for that title. You can still use your own photo.</p>';
+    } catch (e) { if (box()) box().innerHTML = '<p class="muted" style="margin:18px 0">Couldn’t reach the cover service right now. Try again later, or use your own photo.</p>'; }
+  }
+  async function useCandidate(i) {
+    const c = coverCands[i]; if (!c) return; const id = c.gameId;
+    const b = $('#candBox'); if (b) b.innerHTML = '<p class="muted" style="margin:18px 0">Saving cover…</p>';
+    try {
+      if (!db) throw new Error('no storage');
+      const url = await fetchCoverFor(c), prev = covers[id]; covers[id] = url;
+      if (!(await saveCovers())) { if (prev) covers[id] = prev; else delete covers[id]; closeSheet(); return; }
+      closeSheet(); await mutate((s) => { const g = gameById2(s, id); if (g) g.updatedAt = Date.now(); }, 'Cover saved');
+    } catch (e) { if ($('#candBox')) $('#candBox').innerHTML = '<p class="muted" style="margin:18px 0">Couldn’t download that cover. Try another one, or use your own photo.</p>'; }
+  }
+  async function batchCovers() {
+    const todo = state.games.filter((g) => !covers[g.id]);
+    if (!todo.length) return toast('Every game already has a photo cover');
+    if (!db) return toast('Photos need device storage, which this browser has blocked', true);
+    if (navigator.onLine === false) return toast('Connect to the internet first', true);
+    batch = { cancel: false, done: 0, found: 0, total: todo.length, missed: [], fails: 0 };
+    const b = batch;
+    const paint = (final) => { const el = $('#bprog'); if (!el) { b.cancel = true; return; }
+      el.innerHTML = `<div class="bar"><i style="width:${Math.round((b.done / b.total) * 100)}%"></i></div>
+        <p style="margin:12px 0 4px"><b>${b.found}</b> found · ${b.done} of ${b.total} checked</p>
+        ${final ? `<p class="muted small">${b.cancel && b.done < b.total ? 'Stopped. ' : ''}${b.fails >= 3 ? 'The cover service could not be reached, so this stopped early. ' : ''}${b.missed.length ? `${plural(b.missed.length, 'game')} had no clear match and keep the generated cover. Open one and tap “Find cover online” to pick by hand.` : ''}</p>` : '<p class="muted small">Keep this open. Only exact title matches are saved automatically.</p>'}`; };
+    openSheet(`<h2>Finding covers</h2><div id="bprog"></div><div class="actions"><button class="btn" id="bstop" data-act="stop-batch">Stop</button></div>`);
+    paint(false); let sinceSave = 0, consecutive = 0;
+    for (const g of todo) {
+      if (b.cancel) break;
+      try {
+        const res = await wikiSearch(g.title), key = normKey(g.title), hit = res.find((r) => wikiBase(r.title) === key && isGamePage(r.title));
+        consecutive = 0;
+        if (hit) { covers[g.id] = await fetchCoverFor(hit); b.found++; sinceSave++; } else b.missed.push(g.title);
+      } catch (e) { b.fails++; consecutive++; b.missed.push(g.title); if (consecutive >= 3) { b.cancel = true; } }
+      b.done++; paint(false);
+      if (sinceSave >= 5) { sinceSave = 0; await saveCovers(); }
+      await sleep(120);
+    }
+    await saveCovers();
+    if (b.found) await mutate((s) => { s.games.forEach((x) => { if (covers[x.id]) x.updatedAt = Math.max(x.updatedAt, 1); }); }, null);
+    const bs = $('#bstop'); if (bs) { bs.textContent = 'Done'; bs.dataset.act = 'close-sheet'; }
+    paint(true); render();
+    if (b.found) toast(`Saved ${plural(b.found, 'cover')}`);
+    batch = null;
   }
 
   // ───────────────────────── built-in game list (autocomplete) ─────────────────────────
@@ -288,14 +487,37 @@
       const i = line.indexOf('|'); const title = (i < 0 ? line : line.slice(0, i)).trim(); if (!title) return;
       const plats = (i < 0 ? '' : line.slice(i + 1)).split(/[\s,]+/).filter((p) => PLATFORMS.includes(p) && p !== 'Other');
       const key = normKey(title); if (!key) return;
-      const cur = map.get(key) || { title, key, plats: [] };
+      const cur = map.get(key) || { title, key, plats: [], date: '' };
       plats.forEach((p) => { if (!cur.plats.includes(p)) cur.plats.push(p); });
+      const dm = (i < 0 ? '' : line.slice(i + 1)).match(/\b(\d{4}-\d{2}-\d{2}|\d{4}|TBA)\b/i);
+      if (dm && !cur.date) cur.date = dm[1].toUpperCase();
       map.set(key, cur);
     });
     return [...map.values()];
   })();
-  function searchCatalog(q) {
-    const k = normKey(q); if (k.length < 2) return [];
+  const CATALOG_BY_KEY = new Map(CATALOG.map((g) => [g.key, g]));
+  /** Release info for a catalog entry: label shown to the user, whether it is still to come, and a sortable number. */
+  function relInfo(g) {
+    const d = g.date, today = todayStr();
+    if (!d) return { label: '', upcoming: false, sort: 0 };
+    if (d === 'TBA') return { label: 'TBA', upcoming: true, sort: 99999999 };
+    if (d.length === 10) { const up = d > today; return { label: up ? 'Out ' + fmtDate(d) : fmtDate(d), upcoming: up, sort: +d.replace(/-/g, '') }; }
+    const up = +d > +today.slice(0, 4);
+    return { label: up ? 'Expected ' + d : d, upcoming: up, sort: +d * 10000 + 615 };
+  }
+  // Short names people actually type → words used in the real titles.
+  const ALIASES = { gta: 'grand theft auto', cod: 'call of duty', mw: 'modern warfare', bo: 'black ops', rdr: 'red dead redemption', re: 'resident evil', ff: 'final fantasy', dq: 'dragon quest', gow: 'god of war', tlou: 'the last of us', nfs: 'need for speed', pes: 'pro evolution soccer', mgs: 'metal gear solid', ac: 'assassin s creed', dmc: 'devil may cry', botw: 'breath of the wild', totk: 'tears of the kingdom', sf: 'street fighter', mk: 'mortal kombat', cs: 'counter strike', lol: 'league of legends', fh: 'forza horizon', tw: 'total war', sm: 'super mario', ds: 'dark souls', er: 'elden ring', hzd: 'horizon zero dawn', nba: 'nba', ufc: 'ufc' };
+  function expandQuery(q) {
+    return normKey(q).split(' ').map((w) => {
+      const m = /^([a-z]+?)(\d+)$/.exec(w);
+      if (ALIASES[w]) return ALIASES[w];
+      if (m && ALIASES[m[1]]) return ALIASES[m[1]] + ' ' + m[2];
+      return w;
+    }).join(' ');
+  }
+  function searchCatalog(q, limit = 6, keepExact = false) {
+    const k0 = normKey(q); if (k0.length < 2) return [];
+    const k = normKey(expandQuery(q));
     const words = k.split(' ');
     const scored = [];
     for (const g of CATALOG) {
@@ -304,11 +526,11 @@
       else if (g.key.split(' ').some((w) => w.startsWith(words[0])) && words.every((w) => g.key.includes(w))) score = 1;
       else if (words.every((w) => g.key.includes(w))) score = 2;
       else continue;
-      if (g.key === k) continue; // already typed in full
+      if (g.key === k && !keepExact) continue; // already typed in full
       scored.push([score, g.key.length, g]);
     }
     scored.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-    return scored.slice(0, 6).map((x) => x[2]);
+    return scored.slice(0, limit).map((x) => x[2]);
   }
   function showSuggestions(form) {
     const box = $('#sugg'); if (!box) return;
@@ -317,22 +539,22 @@
   }
 
   // ───────────────────────── UI plumbing ─────────────────────────
-  const ui = { libQ: '', libStatus: 'all', libPlat: 'all', libSort: 'recent', jQ: '', jType: 'all', gType: 'all' };
-  let toastTimer = null;
+  const ui = { libQ: '', libStatus: 'all', libPlat: 'all', libSort: 'recent', updated: false, jQ: '', jType: 'all', gType: 'all' };
+  let toastTimer = null, shareUrl = null, shareState = null;
   function toast(msg, isErr) {
     const t = $('#toast'); t.textContent = msg; t.className = 'show' + (isErr ? ' err' : '');
     clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = ''; }, isErr ? 6000 : 2800);
   }
-  function openSheet(html) {
+  function openSheet(html, cls) {
     closeSheet();
     const bd = document.createElement('div'); bd.className = 'sheet-backdrop'; bd.id = 'sheet';
-    bd.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
+    bd.innerHTML = `<div class="sheet ${cls || ''}" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
     bd.addEventListener('click', (e) => { if (e.target === bd) closeSheet(); });
     document.body.appendChild(bd); document.body.classList.add('noscroll');
     requestAnimationFrame(() => bd.classList.add('open'));
     return bd;
   }
-  function closeSheet() { const s = $('#sheet'); if (s) s.remove(); document.body.classList.remove('noscroll'); }
+  function closeSheet() { if (shareUrl) { URL.revokeObjectURL(shareUrl); shareUrl = null; } const s = $('#sheet'); if (s) s.remove(); document.body.classList.remove('noscroll'); }
   function confirmBox({ title, message, okLabel = 'OK', danger = false }) {
     return new Promise((resolve) => {
       const sh = openSheet(`<h2>${esc(title)}</h2><p class="muted" style="margin-top:6px">${esc(message)}</p>
@@ -346,16 +568,19 @@
     const h = (location.hash || '#/').replace(/^#\/?/, '');
     const [a, b] = h.split('/');
     if (a === 'game' && b) return { name: 'game', id: decodeURIComponent(b), key: 'game/' + b };
-    if (['library', 'journal', 'backup'].includes(a)) return { name: a, key: a };
+    if (['library', 'journal', 'backup', 'stats'].includes(a)) return { name: a, key: a };
     return { name: 'home', key: 'home' };
   }
 
   function gameCard(g) {
     const n = notesOf(g.id).length;
-    return `<a class="card game" href="#/game/${encodeURIComponent(g.id)}">
-      <div class="g-top"><h3>${esc(g.title)}</h3><span class="pill st-${g.status}">${esc(statusLabel(g.status))}</span></div>
-      <div class="g-meta"><span class="plat">${esc(g.platform)}</span><span>${plural(n, 'note')}</span></div>
-      <div class="bar"><i style="width:${g.progress}%"></i></div><div class="pct">${g.progress}%</div></a>`;
+    return `<a class="card game withcover" href="#/game/${encodeURIComponent(g.id)}"><div class="gc-cover">${coverHTML(g, 'thumb')}</div><div class="gc-body">
+      <div class="g-top"><h3>${g.fav ? '<span class="heart" aria-label="Favorite">♥</span> ' : ''}${esc(g.title)}</h3><span class="pill st-${g.status}">${esc(statusLabel(g.status))}</span></div>
+      <div class="g-meta"><span class="plat">${esc(g.platform)}</span><span>${plural(n, 'note')}</span>${g.rating ? `<span class="rate-badge">★ ${g.rating}/10</span>` : ''}${g.queue ? '<span class="queue-badge">Up next</span>' : ''}</div>
+      <div class="bar"><i style="width:${g.progress}%"></i></div><div class="pct">${g.progress}%</div></div></a>`;
+  }
+  function queueCard(g) {
+    return `<div class="card qcard"><div class="gc-cover sm">${coverHTML(g, 'thumb')}</div><a href="#/game/${encodeURIComponent(g.id)}"><h3>${esc(g.title)}</h3><div class="g-meta" style="margin:4px 0 0"><span class="plat">${esc(g.platform)}</span></div></a><button class="btn sm primary" data-act="start-game" data-id="${esc(g.id)}">${icon('next')}Start</button></div>`;
   }
   function noteCard(n, { showGame = false, actions = false } = {}) {
     const g = gameById(n.gameId);
@@ -376,6 +601,7 @@
     const c = (s) => state.games.filter((g) => g.status === s).length;
     const playing = state.games.filter((g) => g.status === 'playing').sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5);
     const recent = state.notes.slice().sort(byNewestNote).slice(0, 4);
+    const queued = state.games.filter((g) => g.queue).sort((a, b) => a.queue - b.queue).slice(0, 5);
     if (!state.games.length) {
       return { title: LOGO + 'Save Point', fab: null, html: emptyState('pad', 'Your journal is empty', 'Add the first game you’re playing, then jot down missions, boss tips, codes and builds as you go.', `<button class="btn primary" data-act="add-game">${icon('plus')}Add your first game</button>`) };
     }
@@ -386,7 +612,8 @@
         <div class="stat accent"><b>${c('playing')}</b><span>Playing now</span></div>
         <div class="stat good"><b>${c('finished')}</b><span>Completed</span></div>
       </div>
-      <div class="substats">${c('want')} want to play · ${c('paused')} paused · ${plural(state.notes.length, 'note')}</div>
+      <div class="substats">${c('want')} want to play · ${c('paused')} paused · ${plural(state.notes.length, 'note')}${state.games.some((g) => g.fav) ? ` · <span class="heart">♥</span> ${state.games.filter((g) => g.fav).length}` : ''}</div>
+      ${queued.length ? `<div class="section-title">Up next <a href="#/library" data-act="open-queue">See all</a></div>${queued.map(queueCard).join('')}` : ''}
       <div class="section-title">Continue playing <a href="#/library">All games</a></div>
       ${playing.length ? playing.map(gameCard).join('') : '<p class="muted card">Nothing marked “Playing” right now.</p>'}
       <div class="section-title">Recent notes <a href="#/journal">All notes</a></div>
@@ -398,24 +625,28 @@
     let list = state.games.slice();
     const q = ui.libQ.trim().toLowerCase();
     if (q) list = list.filter((g) => g.title.toLowerCase().includes(q) || g.platform.toLowerCase().includes(q));
-    if (ui.libStatus !== 'all') list = list.filter((g) => g.status === ui.libStatus);
+    if (ui.libStatus === 'fav') list = list.filter((g) => g.fav);
+    else if (ui.libStatus === 'queue') list = list.filter((g) => g.queue);
+    else if (ui.libStatus !== 'all') list = list.filter((g) => g.status === ui.libStatus);
     if (ui.libPlat !== 'all') list = list.filter((g) => g.platform === ui.libPlat);
-    const sorters = { recent: (a, b) => b.updatedAt - a.updatedAt, title: (a, b) => a.title.localeCompare(b.title), progress: (a, b) => b.progress - a.progress };
+    const sorters = { recent: (a, b) => b.updatedAt - a.updatedAt, title: (a, b) => a.title.localeCompare(b.title), progress: (a, b) => b.progress - a.progress, rating: (a, b) => b.rating - a.rating || a.title.localeCompare(b.title) };
     list.sort(sorters[ui.libSort] || sorters.recent);
+    if (ui.libStatus === 'queue') list.sort((a, b) => a.queue - b.queue);
     if (!list.length) return emptyState('library', state.games.length ? 'No matches' : 'No games yet', state.games.length ? 'Try a different search or filter.' : 'Tap “Game” to add one.');
     return `<p class="muted small" style="margin:8px 4px">${plural(list.length, 'game')}</p>` + list.map(gameCard).join('');
   }
   function viewLibrary() {
     const plats = [...new Set(state.games.map((g) => g.platform))].sort();
-    const chips = [{ id: 'all', label: 'All' }, ...STATUSES].map((s) => `<button class="chip ${ui.libStatus === s.id ? 'on' : ''}" data-act="set-ui" data-k="libStatus" data-v="${s.id}">${esc(s.label)}</button>`).join('');
+    const chips = [{ id: 'all', label: 'All' }, ...STATUSES, { id: 'fav', label: '♥ Favorites' }, { id: 'queue', label: 'Up next' }].map((s) => `<button class="chip ${ui.libStatus === s.id ? 'on' : ''}" data-act="set-ui" data-k="libStatus" data-v="${s.id}">${esc(s.label)}</button>`).join('');
     return {
       title: 'Library', fab: { label: 'Game', act: 'add-game' }, html: `
       <input type="search" placeholder="Search games…" value="${esc(ui.libQ)}" data-bind="libQ" aria-label="Search games" enterkeyhint="search">
       <div class="chips" style="margin-top:10px">${chips}</div>
       <div class="filters">
         <select data-bind="libPlat" aria-label="Platform"><option value="all">All platforms</option>${plats.map((p) => `<option ${ui.libPlat === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select>
-        <select data-bind="libSort" aria-label="Sort"><option value="recent" ${ui.libSort === 'recent' ? 'selected' : ''}>Recently active</option><option value="title" ${ui.libSort === 'title' ? 'selected' : ''}>Title A–Z</option><option value="progress" ${ui.libSort === 'progress' ? 'selected' : ''}>Most complete</option></select>
+        <select data-bind="libSort" aria-label="Sort"><option value="recent" ${ui.libSort === 'recent' ? 'selected' : ''}>Recently active</option><option value="title" ${ui.libSort === 'title' ? 'selected' : ''}>Title A–Z</option><option value="progress" ${ui.libSort === 'progress' ? 'selected' : ''}>Most complete</option><option value="rating" ${ui.libSort === 'rating' ? 'selected' : ''}>Highest rated</option></select>
       </div>
+      ${state.games.some((g) => !covers[g.id]) ? `<button class="btn sm block" data-act="fetch-all-covers" style="margin-top:12px">Find real covers online</button>` : ''}
       <div id="listBox">${libraryList()}</div>`
     };
   }
@@ -450,16 +681,151 @@
     return {
       title: esc(g.title), back: '#/library', fab: { label: 'Note', act: 'add-note', id: g.id }, html: `
       <div class="card">
-        <div class="g-meta" style="margin-top:0"><span class="plat">${esc(g.platform)}</span><span>Added ${esc(fmtDate(dateStr(new Date(g.createdAt))))}</span></div>
+        <div class="hero"><div class="hero-cv">${coverHTML(g, 'full')}</div><div class="hero-side">
+          <span class="plat">${esc(g.platform)}</span><span class="muted small">Added ${esc(fmtDate(dateStr(new Date(g.createdAt))))}</span>
+          <button class="btn sm" data-act="find-cover" data-id="${esc(g.id)}">${icon('share')}Find cover online</button>
+          <button class="btn sm" data-act="pick-cover">${icon('upload')}${covers[g.id] ? 'Change photo' : 'Use my photo'}</button>
+          ${covers[g.id] ? `<button class="btn sm" data-act="clear-cover" data-id="${esc(g.id)}">Use generated cover</button>` : ''}
+          <input id="coverIn" type="file" accept="image/*" data-cover="${esc(g.id)}" hidden>
+        </div></div>
         <div class="seg" role="group" aria-label="Status">${STATUSES.map((s) => `<button class="${g.status === s.id ? 'on' : ''}" data-act="quick-status" data-id="${g.id}" data-v="${s.id}">${esc(s.label)}</button>`).join('')}</div>
+        <div class="row tog">
+          <button class="btn ${g.fav ? 'on fav' : ''}" data-act="toggle-fav" data-id="${esc(g.id)}" aria-pressed="${g.fav}">${icon('heart')}${g.fav ? 'Favorite' : 'Add to favorites'}</button>
+          ${g.status === 'playing' || g.status === 'finished' ? '' : `<button class="btn ${g.queue ? 'on' : ''}" data-act="toggle-queue" data-id="${esc(g.id)}" aria-pressed="${!!g.queue}">${icon('next')}${g.queue ? 'In Up next' : 'Up next'}</button>`}
+        </div>
+        <label class="f">YOUR RATING <b class="rate-val">${g.rating ? g.rating + ' / 10' : 'not rated'}</b></label>
+        <div class="rate" role="group" aria-label="Rating out of 10">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => `<button class="${g.rating === v ? 'on' : ''}" data-act="set-rating" data-id="${esc(g.id)}" data-v="${v}" aria-pressed="${g.rating === v}">${v}</button>`).join('')}</div>
         <label class="f" for="prog">COMPLETION</label>
         <div class="range-row"><input id="prog" type="range" min="0" max="100" step="1" value="${g.progress}" data-progress="${esc(g.id)}"><output id="progOut">${g.progress}%</output></div>
-        <div class="row" style="margin-top:14px"><button class="btn" data-act="edit-game" data-id="${esc(g.id)}">${icon('edit')}Edit</button><button class="btn danger" data-act="del-game" data-id="${esc(g.id)}">${icon('trash')}Delete</button></div>
+        <div class="dates">
+          <label class="f" for="dStart">STARTED</label><label class="f" for="dEnd">FINISHED</label>
+          <div class="dwrap"><input id="dStart" type="date" data-date="startedAt" data-id="${esc(g.id)}" value="${esc(g.startedAt)}">${g.startedAt ? `<button class="x" data-act="clear-date" data-k="startedAt" data-id="${esc(g.id)}" aria-label="Clear start date">✕</button>` : ''}</div>
+          <div class="dwrap"><input id="dEnd" type="date" data-date="finishedAt" data-id="${esc(g.id)}" value="${esc(g.finishedAt)}">${g.finishedAt ? `<button class="x" data-act="clear-date" data-k="finishedAt" data-id="${esc(g.id)}" aria-label="Clear finish date">✕</button>` : ''}</div>
+        </div>
+        ${g.startedAt && g.finishedAt && g.finishedAt >= g.startedAt ? `<p class="muted small" style="margin-top:8px">Finished in ${plural(daysBetween(g.startedAt, g.finishedAt) + 1, 'day')}.</p>` : ''}
+        <div class="row" style="margin-top:14px"><button class="btn" data-act="edit-game" data-id="${esc(g.id)}">${icon('edit')}Edit</button><button class="btn" data-act="share-card" data-id="${esc(g.id)}">${icon('share')}Share</button><button class="btn danger" data-act="del-game" data-id="${esc(g.id)}">${icon('trash')}Delete</button></div>
       </div>
       <div class="section-title">Notes</div>
       ${all.length ? `<div class="chips">${chips}</div>` : ''}
       ${list.length ? list.map((n) => noteCard(n, { actions: true })).join('') : emptyState('journal', 'No notes yet', 'Missions, boss tips, codes, builds, locations… tap “Note”.')}`
     };
+  }
+
+
+  // ───────────────────────── stats ─────────────────────────
+  function viewStats() {
+    const gs = state.games;
+    if (!gs.length) return { title: 'Stats', fab: null, html: emptyState('stats', 'No stats yet', 'Add some games, rate them and mark the ones you finish. Your numbers show up here.') };
+    const rated = gs.filter((g) => g.rating), avg = rated.length ? rated.reduce((a, g) => a + g.rating, 0) / rated.length : 0;
+    const fin = gs.filter((g) => g.status === 'finished');
+    const spans = fin.filter((g) => g.startedAt && g.finishedAt && g.finishedAt >= g.startedAt).map((g) => daysBetween(g.startedAt, g.finishedAt) + 1);
+    const avgDays = spans.length ? Math.round(spans.reduce((a, b) => a + b, 0) / spans.length) : 0;
+    const hbar = (label, n, max, cls) => `<div class="hb"><span class="hb-l">${esc(label)}</span><div class="hb-t"><i class="${cls || ''}" style="width:${max ? Math.max(n ? 4 : 0, Math.round((n / max) * 100)) : 0}%"></i></div><span class="hb-n">${n}</span></div>`;
+    const stCounts = STATUSES.map((st) => [st.label, gs.filter((g) => g.status === st.id).length, st.id]);
+    const stMax = Math.max(...stCounts.map((x) => x[1]));
+    const dist = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => rated.filter((g) => g.rating === v).length), dMax = Math.max(1, ...dist);
+    const plats = {}; gs.forEach((g) => { plats[g.platform] = (plats[g.platform] || 0) + 1; });
+    const pl = Object.entries(plats).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 8), pMax = pl.length ? pl[0][1] : 0;
+    const now = new Date(), months = [];
+    for (let i = 5; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); months.push({ key: `${d.getFullYear()}-${pad(d.getMonth() + 1)}`, label: MONTHS[d.getMonth()] }); }
+    const perMonth = months.map((m) => [m.label, fin.filter((g) => (g.finishedAt || '').slice(0, 7) === m.key).length]), mMax = Math.max(...perMonth.map((x) => x[1]));
+    const finDated = fin.filter((g) => g.finishedAt).length;
+    const top = rated.slice().sort((a, b) => b.rating - a.rating || a.title.localeCompare(b.title)).slice(0, 5);
+    return {
+      title: 'Stats', fab: null, html: `
+      <div class="stats">
+        <div class="stat"><b>${gs.length}</b><span>Games</span></div>
+        <div class="stat good"><b>${fin.length}</b><span>Finished</span></div>
+        <div class="stat accent"><b>${rated.length ? avg.toFixed(1) : '–'}</b><span>Avg rating</span></div>
+      </div>
+      <div class="substats">${rated.length ? plural(rated.length, 'rated game') : 'No ratings yet'} · ${plural(state.notes.length, 'note')}${avgDays ? ` · finish in ~${plural(avgDays, 'day')}` : ''}</div>
+      <div class="card"><h3 class="ct">By status</h3>${stCounts.map(([l, n, id]) => hbar(l, n, stMax, 'st-' + id)).join('')}</div>
+      <div class="card"><h3 class="ct">Your ratings</h3>${rated.length ? `<div class="hist">${dist.map((n, i) => `<div class="hcol"><small>${n || ''}</small><div class="hc-t"><i style="height:${Math.round((n / dMax) * 100)}%"></i></div><b>${i + 1}</b></div>`).join('')}</div>` : '<p class="sub">Rate a game 1–10 to see how you score things.</p>'}</div>
+      <div class="card"><h3 class="ct">By platform</h3>${pl.map(([l, n]) => hbar(l, n, pMax)).join('')}</div>
+      <div class="card"><h3 class="ct">Finished per month</h3>${finDated ? perMonth.map(([l, n]) => hbar(l, n, mMax, 'st-finished')).join('') : '<p class="sub">Finished games with a finish date appear here (last 6 months).</p>'}</div>
+      ${top.length ? `<div class="card"><h3 class="ct">Top rated</h3>${top.map((g, i) => `<a class="toprow" href="#/game/${encodeURIComponent(g.id)}"><span class="rk">${i + 1}</span><span class="tt">${esc(g.title)}</span><span class="rate-badge">★ ${g.rating}</span></a>`).join('')}</div>` : ''}`
+    };
+  }
+
+  // ───────────────────────── share card ─────────────────────────
+  const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+  function rrect(x, a, b, w, h, r) { x.beginPath(); x.moveTo(a + r, b); x.arcTo(a + w, b, a + w, b + h, r); x.arcTo(a + w, b + h, a, b + h, r); x.arcTo(a, b + h, a, b, r); x.arcTo(a, b, a + w, b, r); x.closePath(); }
+  function wrapText(x, text, maxW, maxLines) {
+    const words = String(text).split(/\s+/), lines = []; let cur = '';
+    words.forEach((w) => { const t = cur ? cur + ' ' + w : w; if (x.measureText(t).width <= maxW || !cur) cur = t; else { lines.push(cur); cur = w; } });
+    if (cur) lines.push(cur);
+    if (lines.length > maxLines) { lines.length = maxLines; let l = lines[maxLines - 1]; while (l.length > 1 && x.measureText(l + '…').width > maxW) l = l.slice(0, -1); lines[maxLines - 1] = l + '…'; }
+    return lines;
+  }
+  async function makeShareCard(g) {
+    const coverImg = await coverImageFor(g);
+    const W = 1080, H = 1350, c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d');
+    let bg = x.createLinearGradient(0, 0, W, H); bg.addColorStop(0, '#060a13'); bg.addColorStop(1, '#10224a'); x.fillStyle = bg; x.fillRect(0, 0, W, H);
+    const glow = x.createRadialGradient(W - 120, 160, 10, W - 120, 160, 700); glow.addColorStop(0, 'rgba(34,211,238,.32)'); glow.addColorStop(1, 'rgba(34,211,238,0)'); x.fillStyle = glow; x.fillRect(0, 0, W, H);
+    const glow2 = x.createRadialGradient(120, H - 100, 10, 120, H - 100, 600); glow2.addColorStop(0, 'rgba(59,130,246,.28)'); glow2.addColorStop(1, 'rgba(59,130,246,0)'); x.fillStyle = glow2; x.fillRect(0, 0, W, H);
+    x.strokeStyle = 'rgba(34,211,238,.35)'; x.lineWidth = 3; rrect(x, 40, 40, W - 80, H - 80, 48); x.stroke();
+    const pad = 100;
+    // brand
+    const lg = x.createLinearGradient(pad, 100, pad + 56, 170); lg.addColorStop(0, '#22d3ee'); lg.addColorStop(1, '#3b82f6');
+    x.fillStyle = lg; x.beginPath(); x.moveTo(pad + 28, 100); x.lineTo(pad + 56, 138); x.lineTo(pad + 28, 176); x.lineTo(pad, 138); x.closePath(); x.fill();
+    x.fillStyle = '#8aa0c4'; x.font = `800 38px ${FONT}`; x.textBaseline = 'middle'; if ('letterSpacing' in x) x.letterSpacing = '6px'; x.fillText('SAVE POINT', pad + 84, 140); if ('letterSpacing' in x) x.letterSpacing = '0px';
+    // status pill
+    const stColors = { want: '#8aa0c4', playing: '#22d3ee', paused: '#fbbf24', finished: '#34d399' };
+    const stc = stColors[g.status] || '#8aa0c4', stl = statusLabel(g.status).toUpperCase();
+    x.font = `800 34px ${FONT}`; const pw = x.measureText(stl).width + 64;
+    x.fillStyle = 'rgba(255,255,255,.06)'; rrect(x, pad, 280, pw, 76, 38); x.fill(); x.strokeStyle = stc; x.lineWidth = 3; x.stroke();
+    x.fillStyle = stc; x.fillText(stl, pad + 32, 319);
+    // title
+    x.fillStyle = '#e8f0ff'; x.textBaseline = 'alphabetic';
+    let fs = 112, lines;
+    for (; fs >= 64; fs -= 8) { x.font = `800 ${fs}px ${FONT}`; lines = wrapText(x, g.title, W - pad * 2, 4); if (lines.length <= 3 && !/…$/.test(lines[lines.length - 1])) break; }
+    x.font = `800 ${fs}px ${FONT}`; lines = wrapText(x, g.title, W - pad * 2, 4);
+    let y = 470; lines.forEach((l) => { x.fillText(l, pad, y); y += fs * 1.13; });
+    const big = lines.length <= 2, cw = big ? 240 : 210, ch = cw * 4 / 3, cx = W - pad - cw, cy = big ? 620 : 660;
+    x.fillStyle = '#22d3ee'; x.font = `700 44px ${FONT}`; x.fillText(g.platform, pad, y + 20); y += 120;
+    // rating
+    if (g.rating) {
+      const rg = x.createLinearGradient(pad, y, pad + 400, y + 300); rg.addColorStop(0, '#fde68a'); rg.addColorStop(1, '#fbbf24');
+      const rb = Math.min(940, Math.max(y + 230, 880));
+      x.fillStyle = rg; x.font = `900 240px ${FONT}`; x.fillText(String(g.rating), pad - 6, rb);
+      const nw = x.measureText(String(g.rating)).width;
+      x.fillStyle = '#8aa0c4'; x.font = `800 80px ${FONT}`; x.fillText('/10', pad + nw + 6, rb);
+    } else { x.fillStyle = '#8aa0c4'; x.font = `700 56px ${FONT}`; x.fillText('Not rated yet', pad, Math.min(y + 150, 900)); }
+    if (coverImg) { x.save(); rrect(x, cx, cy, cw, ch, 22); x.clip(); x.drawImage(coverImg, cx, cy, cw, ch); x.restore(); x.strokeStyle = 'rgba(255,255,255,.25)'; x.lineWidth = 3; rrect(x, cx, cy, cw, ch, 22); x.stroke(); }
+    // progress
+    const by = 1030, bw = W - pad * 2;
+    x.fillStyle = '#8aa0c4'; x.font = `700 36px ${FONT}`; x.fillText('COMPLETION', pad, by - 28);
+    x.textAlign = 'right'; x.fillStyle = '#22d3ee'; x.font = `800 44px ${FONT}`; x.fillText(g.progress + '%', W - pad, by - 24); x.textAlign = 'left';
+    x.fillStyle = 'rgba(255,255,255,.08)'; rrect(x, pad, by, bw, 34, 17); x.fill();
+    if (g.progress > 0) { const pg = x.createLinearGradient(pad, 0, pad + bw, 0); pg.addColorStop(0, '#22d3ee'); pg.addColorStop(1, '#3b82f6'); x.fillStyle = pg; rrect(x, pad, by, Math.max(34, bw * g.progress / 100), 34, 17); x.fill(); }
+    // dates + notes
+    const bits = []; if (g.startedAt) bits.push('Started ' + fmtDate(g.startedAt)); if (g.finishedAt) bits.push('Finished ' + fmtDate(g.finishedAt));
+    const nn = notesOf(g.id).length; if (nn) bits.push(plural(nn, 'note'));
+    const line = bits.join('  ·  '); let lf = 36; x.fillStyle = '#b8c8e6'; for (; lf > 24; lf -= 2) { x.font = `600 ${lf}px ${FONT}`; if (x.measureText(line).width <= bw) break; }
+    x.fillText(line, pad, by + 110);
+    if (g.fav) { x.fillStyle = '#f472b6'; x.font = `800 44px ${FONT}`; x.textAlign = 'right'; x.fillText('♥ Favorite', W - pad, 140); x.textAlign = 'left'; }
+    x.fillStyle = '#5b7099'; x.font = `600 32px ${FONT}`; x.fillText('My gaming journal · Save Point', pad, H - 96);
+    return new Promise((res) => { if (c.toBlob) c.toBlob((b) => res(b), 'image/png'); else res(null); });
+  }
+  async function openShareCard(id) {
+    const g = gameById(id); if (!g) return;
+    let blob = null; try { blob = await makeShareCard(g); } catch (e) { /* handled below */ }
+    if (!blob) return toast('Could not make the card on this browser', true);
+    const slug = g.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'game';
+    shareState = { blob, name: `save-point-${slug}.png`, title: g.title };
+    openSheet(`<h2>Share card</h2><p class="muted small">Tap Share, then choose “Save Image” or send it to a friend.</p>`, '');
+    shareUrl = URL.createObjectURL(blob);
+    const sh = $('#sheet .sheet'); sh.insertAdjacentHTML('beforeend', `<img class="share-img" src="${shareUrl}" alt="Share card for ${esc(g.title)}"><div class="actions"><button class="btn" data-act="close-sheet">Close</button><button class="btn primary" data-act="do-share-card">${icon('share')}Share</button></div>`);
+  }
+  async function doShareCard() {
+    if (!shareState) return; const { blob, name, title } = shareState;
+    const file = new File([blob], name, { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000); toast('Image saved to your downloads');
   }
 
   function viewBackup() {
@@ -473,7 +839,7 @@
       <div class="card">
         <h3 class="ct">Back up your journal</h3>
         <p class="sub">Your data exists only on this phone. A backup file is your protection against clearing Safari data, deleting the app, or changing phones.</p>
-        <div class="kv"><span>Contents</span><span>${plural(state.games.length, 'game')}, ${plural(state.notes.length, 'note')}</span></div>
+        <div class="kv"><span>Contents</span><span>${plural(state.games.length, 'game')}, ${plural(state.notes.length, 'note')}${Object.keys(covers).length ? `, ${plural(Object.keys(covers).length, 'photo')}` : ''}</span></div>
         <div class="kv"><span>Last backup</span>${backupLine}</div>
         <div class="kv"><span>Changes since then</span><span class="${m.changes ? 'warn' : ''}">${m.changes}</span></div>
         <div class="stack" style="margin-top:14px">
@@ -498,6 +864,15 @@
         <div class="kv"><span>Storage protected from cleanup</span>${pers}</div>
         <div class="kv"><span>Offline app files</span><span id="offlineStatus" class="muted">Checking…</span></div>
         <div class="kv"><span>Running as installed app</span><span>${isStandalone() ? '<span class="ok">Yes</span>' : '<span class="warn">No – open from Home Screen icon</span>'}</span></div>
+      </div>
+      <div class="card">
+        <h3 class="ct">App version &amp; updates</h3>
+        <div class="kv"><span>App version</span><span>${esc(APP_VERSION)}</span></div>
+        <div class="kv"><span>Built-in game list</span><span>${CATALOG.length} games</span></div>
+        <div class="stack" style="margin-top:12px">
+          <button class="btn block" data-act="check-update">Check for update</button>
+          <p class="muted small">When you upload new files to GitHub, tap this (while online). Your journal is never touched by an update.</p>
+        </div>
       </div>
       <div class="card">
         <h3 class="ct">Danger zone</h3>
@@ -527,14 +902,14 @@
   function render() {
     const r = route();
     let v;
-    if (r.name === 'game') v = viewGame(r.id); else v = { home: viewHome, library: viewLibrary, journal: viewJournal, backup: viewBackup }[r.name]();
+    if (r.name === 'game') v = viewGame(r.id); else v = { home: viewHome, library: viewLibrary, stats: viewStats, journal: viewJournal, backup: viewBackup }[r.name]();
     $('#title').innerHTML = v.title;
     const back = $('#backBtn');
     if (v.back) { back.hidden = false; back.innerHTML = icon('back'); back.dataset.href = v.back; } else back.hidden = true;
     $('#view').innerHTML = v.html;
     const fab = $('#fab');
     if (v.fab) { fab.hidden = false; fab.innerHTML = `${icon('plus')}${esc(v.fab.label)}`; fab.dataset.act = v.fab.act; fab.dataset.id = v.fab.id || ''; } else fab.hidden = true;
-    $('#tabs').innerHTML = `<div class="inner">${[['home', 'Home', '#/'], ['library', 'Library', '#/library'], ['journal', 'Journal', '#/journal'], ['backup', 'Backup', '#/backup']]
+    $('#tabs').innerHTML = `<div class="inner">${[['home', 'Home', '#/'], ['library', 'Library', '#/library'], ['stats', 'Stats', '#/stats'], ['journal', 'Journal', '#/journal'], ['backup', 'Backup', '#/backup']]
       .map(([k, l, h]) => `<a href="${h}" class="${(r.name === k || (r.name === 'game' && k === 'library')) ? 'active' : ''}" ${r.name === k ? 'aria-current="page"' : ''}>${icon(k === 'home' ? 'home' : k)}${l}</a>`).join('')}</div>`;
     if (r.key !== lastRouteKey) { window.scrollTo(0, 0); lastRouteKey = r.key; }
     if (r.name === 'backup') afterBackupView();
@@ -545,12 +920,13 @@
     if (storage.mode !== 'indexeddb') out.push(`<div class="banner err"><p><b>Storage warning:</b> this browser blocked IndexedDB, so Save Point is using a smaller fallback. Export backups often.</p></div>`);
     if (total && !state.meta.lastBackupAt) out.push(`<div class="banner"><p><b>No backup yet.</b> Your journal only exists on this phone.</p><button class="btn sm" data-act="export">Back up</button></div>`);
     else if (total && state.meta.changes >= 10) out.push(`<div class="banner"><p><b>${plural(state.meta.changes, 'change')}</b> since your last backup.</p><button class="btn sm" data-act="export">Back up</button></div>`);
+    if (ui.updated) out.unshift(`<div class="banner"><p><b>Save Point was updated.</b> Reload to use the new version.</p><button class="btn sm" data-act="reload">Reload</button></div>`);
     el.innerHTML = out.join('');
   }
 
   // ───────────────────────── forms ─────────────────────────
-  function gameForm(g) {
-    const isEdit = !!g; g = g || { title: '', platform: 'PS5', status: 'want', progress: 0 };
+  function gameForm(g, prefill) {
+    const isEdit = !!g; g = g || { title: prefill || '', platform: multi.pref || 'PS5', status: 'want', progress: 0, rating: 0 };
     const known = PLATFORMS.includes(g.platform) && g.platform !== 'Other';
     const sel = known ? g.platform : 'Other';
     const radios = (name, items, cur) => `<div class="opts">${items.map((i) => `<label><input type="radio" name="${name}" value="${esc(i.id)}" ${cur === i.id ? 'checked' : ''}><span>${esc(i.label)}</span></label>`).join('')}</div>`;
@@ -564,6 +940,8 @@
         <input id="gOther" name="other" type="text" maxlength="40" placeholder="Which platform?" value="${known ? '' : esc(g.platform === 'Other' ? '' : g.platform)}" style="margin-top:10px" ${sel === 'Other' ? '' : 'hidden'}>
         <label class="f">STATUS</label>
         ${radios('status', STATUSES, g.status)}
+ <label class="f">YOUR RATING (OPTIONAL)</label>
+        <div class="opts rates">${[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => `<label><input type="radio" name="rating" value="${v}" ${(g.rating || 0) === v ? 'checked' : ''}><span>${v === 0 ? 'None' : v}</span></label>`).join('')}</div>
         <label class="f" for="gProg">COMPLETION</label>
         <div class="range-row"><input id="gProg" name="progress" type="range" min="0" max="100" step="1" value="${g.progress}"><output id="gProgOut">${g.progress}%</output></div>
         <div class="actions"><button type="button" class="btn" data-act="close-sheet">Cancel</button><button type="submit" class="btn primary">${isEdit ? 'Save' : 'Add game'}</button></div>
@@ -581,14 +959,82 @@
       e.preventDefault();
       const title = F.title.value.trim(); if (!title) return F.title.focus();
       let platform = F.platform.value; if (platform === 'Other') platform = F.other.value.trim() || 'Other';
-      const status = F.status.value, progress = +F.progress.value;
+      const status = F.status.value, progress = +F.progress.value, rating = +F.rating.value || 0;
       closeSheet();
-      if (isEdit) mutate((s) => { Object.assign(gameById2(s, g.id), { title, platform, status, progress, updatedAt: Date.now() }); }, 'Game updated');
-      else { const ng = { id: uid(), title, platform, status, progress, createdAt: Date.now(), updatedAt: Date.now() }; mutate((s) => { s.games.push(ng); }, 'Game added').then(() => { location.hash = '#/game/' + encodeURIComponent(ng.id); }); }
+      if (isEdit) mutate((s) => { const x = gameById2(s, g.id); Object.assign(x, { title, platform, progress, rating, updatedAt: Date.now() }); if (x.status !== status) { applyStatus(x, status); x.progress = progress; if (status === 'finished') x.progress = 100; } }, 'Game updated');
+      else { const ng = newGame({ title, platform, status, progress, rating }); if (status === 'finished') ng.progress = 100; mutate((s) => { s.games.push(ng); }, 'Game added').then(() => { location.hash = '#/game/' + encodeURIComponent(ng.id); }); }
     });
     if (!isEdit) setTimeout(() => F.title.focus(), 300);
   }
   const gameById2 = (s, id) => s.games.find((x) => x.id === id);
+
+
+  // ───────────────────────── add many games at once ─────────────────────────
+  const multi = { q: '', mode: 'new', sel: new Map(), shown: 60, pref: lsGet(LS_PREF) || '', status: 'want' };
+  const CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>';
+  function multiEntries() {
+    if (normKey(multi.q).length >= 2) return searchCatalog(multi.q, 500, true);
+    const byTitle = (a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+    if (multi.mode === 'az') return CATALOG.slice().sort(byTitle);
+    let list = CATALOG.filter((g) => g.date);
+    if (multi.mode === 'upcoming') return list.filter((g) => relInfo(g).upcoming).sort((a, b) => relInfo(a).sort - relInfo(b).sort || byTitle(a, b));
+    return list.sort((a, b) => relInfo(b).sort - relInfo(a).sort || byTitle(a, b));
+  }
+  function pickRows() {
+    const all = multiEntries(), lib = new Set(state.games.map((g) => normKey(g.title))), slice = all.slice(0, multi.shown);
+    const searching = normKey(multi.q).length >= 2;
+    let html = slice.map((g) => {
+      const on = multi.sel.has(g.key), inLib = lib.has(g.key), r = relInfo(g);
+      const meta = [g.plats.join(' · '), r.label].filter(Boolean).join(' · ');
+      return `<button type="button" class="pick ${on ? 'on' : ''}" data-act="toggle-pick" data-k="${esc(g.key)}" ${inLib ? 'disabled' : ''} aria-pressed="${on}"><span class="tick">${CHECK}</span><span class="gc-cover xs">${thumbFor(g.title)}</span><span class="pk-main"><b>${esc(g.title)}</b><small>${esc(meta) || '&nbsp;'}</small></span>${inLib ? '<em>In library</em>' : r.upcoming ? '<em class="soon">Soon</em>' : ''}</button>`;
+    }).join('');
+    if (all.length > slice.length) html += `<button type="button" class="btn block" data-act="pick-more" style="margin:8px 0">Show more (${all.length - slice.length} left)</button>`;
+    if (!all.length) html += `<p class="muted pick-none">${searching ? 'No match in the built-in list.' : 'Nothing here yet.'}</p>`;
+    html += `<button type="button" class="pick-custom" data-act="add-custom">${searching ? `Add “${esc(multi.q.trim())}” myself` : 'Can’t find it? Add a game myself'}</button>`;
+    return html;
+  }
+  function pickChips() {
+    const searching = normKey(multi.q).length >= 2;
+    if (searching) return `<span class="muted small" style="padding:0 2px">${plural(multiEntries().length, 'result')}</span>`;
+    return [['new', 'New & upcoming'], ['upcoming', 'Only upcoming'], ['az', 'A–Z']].map(([id, l]) => `<button type="button" class="chip ${multi.mode === id ? 'on' : ''}" data-act="pick-mode" data-v="${id}">${l}</button>`).join('');
+  }
+  function pickFoot() {
+    const n = multi.sel.size, b = $('#pickGo'); if (!b) return;
+    b.disabled = !n; b.textContent = n ? `Add ${plural(n, 'game')}` : 'Tap games to select them';
+  }
+  function refreshMulti(keepScroll) {
+    const list = $('#pickList'); if (!list) return;
+    const top = list.scrollTop;
+    list.innerHTML = pickRows(); list.scrollTop = keepScroll ? top : 0;
+    $('#pickChips').innerHTML = pickChips(); pickFoot();
+  }
+  function multiAdd() {
+    multi.q = ''; multi.mode = 'new'; multi.sel = new Map(); multi.shown = 60;
+    openSheet(`<div class="pk-head"><h2>Add games</h2><button type="button" class="btn sm" data-act="add-custom">Type my own</button></div>
+      <input id="pickQ" type="search" placeholder="Search ${CATALOG.length} games…" data-multiq="1" aria-label="Search games" enterkeyhint="search" autocomplete="off" autocapitalize="off">
+      <div class="chips" id="pickChips" style="margin-top:8px"></div>
+      <div id="pickList" class="pick-list"></div>
+      <div class="pick-foot">
+        <div class="pf-row">
+          <label>Platform<select id="pickPlat" data-pickopt="plat"><option value="">Best match</option>${PLATFORMS.filter((p) => p !== 'Other').map((p) => `<option ${multi.pref === p ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
+          <label>Add as<select id="pickStatus" data-pickopt="status">${STATUSES.map((s) => `<option value="${s.id}" ${multi.status === s.id ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}<option value="queue" ${multi.status === 'queue' ? 'selected' : ''}>Up next</option></select></label>
+        </div>
+        <button id="pickGo" type="button" class="btn primary block" data-act="add-picked" disabled>Tap games to select them</button>
+      </div>`, 'tall');
+    refreshMulti();
+  }
+  const pickPlatform = (e) => (multi.pref && e.plats.includes(multi.pref) ? multi.pref : e.plats[0] || 'Other');
+  async function addPicked() {
+    const picks = [...multi.sel.values()]; if (!picks.length) return;
+    const now = Date.now(), status = multi.status;
+    const asQueue = status === 'queue';
+    const games = picks.map((e, i) => { const g = newGame({ title: e.title, platform: pickPlatform(e), status: asQueue ? 'want' : status }); if (asQueue) g.queue = now + i; return g; });
+    closeSheet();
+    ui.libStatus = 'all'; ui.libQ = ''; ui.libPlat = 'all'; ui.libSort = 'recent';
+    await mutate((s) => { games.forEach((g) => s.games.push(g)); }, `Added ${plural(games.length, 'game')}`);
+    multi.sel = new Map();
+    location.hash = '#/library';
+  }
 
   function noteForm(gameId, note) {
     const isEdit = !!note;
@@ -625,7 +1071,32 @@
   // ───────────────────────── events ─────────────────────────
   const actions = {
     'close-sheet': () => closeSheet(),
-    'add-game': () => gameForm(),
+    'add-game': () => multiAdd(),
+    'add-custom': () => { const q = multi.q.trim(); closeSheet(); gameForm(null, q); },
+    'toggle-pick': (t) => {
+      const e = CATALOG_BY_KEY.get(t.dataset.k); if (!e) return;
+      if (multi.sel.has(e.key)) multi.sel.delete(e.key); else multi.sel.set(e.key, e);
+      t.classList.toggle('on', multi.sel.has(e.key)); t.setAttribute('aria-pressed', multi.sel.has(e.key)); pickFoot();
+    },
+    'pick-more': () => { multi.shown += 80; refreshMulti(true); },
+    'pick-mode': (t) => { multi.mode = t.dataset.v; multi.shown = 60; refreshMulti(); },
+    'add-picked': () => addPicked(),
+    'set-rating': (t) => { const id = t.dataset.id, v = +t.dataset.v; mutate((s) => { const g = gameById2(s, id); g.rating = g.rating === v ? 0 : v; g.updatedAt = Date.now(); }); },
+    'toggle-fav': (t) => { const id = t.dataset.id; mutate((s) => { const g = gameById2(s, id); g.fav = !g.fav; g.updatedAt = Date.now(); }); },
+    'toggle-queue': (t) => { const id = t.dataset.id; mutate((s) => { const g = gameById2(s, id); g.queue = g.queue ? 0 : Date.now(); g.updatedAt = Date.now(); }, null); },
+    'start-game': (t) => { const id = t.dataset.id; mutate((s) => { applyStatus(gameById2(s, id), 'playing'); }, 'Started – have fun!'); },
+    'open-queue': () => { ui.libStatus = 'queue'; },
+    'clear-date': (t) => { const id = t.dataset.id, k = t.dataset.k; mutate((s) => { const g = gameById2(s, id); g[k] = ''; g.updatedAt = Date.now(); }); },
+    'share-card': (t) => openShareCard(t.dataset.id),
+    'do-share-card': () => doShareCard(),
+    'find-cover': (t) => findCoverOnline(t.dataset.id),
+    'use-cand': (t) => useCandidate(+t.dataset.i),
+    'fetch-all-covers': () => batchCovers(),
+    'stop-batch': () => { if (batch) batch.cancel = true; const bs = $('#bstop'); if (bs) bs.textContent = 'Stopping…'; },
+    'pick-cover': () => { const f = $('#coverIn'); if (f) f.click(); },
+    'clear-cover': (t) => clearCover(t.dataset.id),
+    'check-update': () => checkUpdate(),
+    'reload': () => location.reload(),
     'pick-sugg': (t) => {
       const form = $('#gameForm'); if (!form) return; const F = form.elements;
       F.title.value = t.dataset.t; $('#sugg').innerHTML = '';
@@ -640,14 +1111,14 @@
     'del-game': async (t) => {
       const g = gameById(t.dataset.id); if (!g) return; const n = notesOf(g.id).length;
       if (await confirmBox({ title: `Delete “${g.title}”?`, message: n ? `This also deletes its ${plural(n, 'note')}. You can’t undo this unless you have a backup.` : 'This can’t be undone unless you have a backup.', okLabel: 'Delete', danger: true })) {
-        location.hash = '#/library'; await mutate((s) => { s.games = s.games.filter((x) => x.id !== g.id); s.notes = s.notes.filter((x) => x.gameId !== g.id); }, 'Game deleted');
+        location.hash = '#/library'; if (covers[g.id]) { delete covers[g.id]; saveCovers(); } await mutate((s) => { s.games = s.games.filter((x) => x.id !== g.id); s.notes = s.notes.filter((x) => x.gameId !== g.id); }, 'Game deleted');
       }
     },
     'add-note': (t) => noteForm(t.dataset.id),
     'edit-note': (t) => { const n = state.notes.find((x) => x.id === t.dataset.id); if (n) noteForm(n.gameId, n); },
     'del-note': async (t) => { const id = t.dataset.id; if (await confirmBox({ title: 'Delete this note?', message: 'This can’t be undone unless you have a backup.', okLabel: 'Delete', danger: true })) mutate((s) => { s.notes = s.notes.filter((x) => x.id !== id); }, 'Note deleted'); },
     'copy-note': async (t) => { const n = state.notes.find((x) => x.id === t.dataset.id); if (!n) return; try { await navigator.clipboard.writeText(n.body); toast('Copied'); } catch (e) { toast('Copy was blocked by the browser', true); } },
-    'quick-status': (t) => { const id = t.dataset.id, v = t.dataset.v; mutate((s) => { const g = gameById2(s, id); g.status = v; if (v === 'finished') g.progress = 100; g.updatedAt = Date.now(); }); },
+    'quick-status': (t) => { const id = t.dataset.id, v = t.dataset.v; mutate((s) => { applyStatus(gameById2(s, id), v); }); },
     'set-ui': (t) => { ui[t.dataset.k] = t.dataset.v; render(); },
     'export': () => exportBackup(),
     'copy-backup': () => copyBackup(),
@@ -664,6 +1135,7 @@
     'erase': async () => {
       if (!(await confirmBox({ title: 'Erase everything?', message: `This deletes ${plural(state.games.length, 'game')} and ${plural(state.notes.length, 'note')} from this device. Make sure you have a backup.`, okLabel: 'Erase all', danger: true }))) return;
       await stashUndo('erase');
+      covers = Object.create(null); await saveCovers();
       await mutate((s) => { s.games = []; s.notes = []; }, 'Everything erased – you can undo from this page');
       state.meta.changes = 0; try { await save(); } catch (e) { /* ignore */ } render(); renderBanners();
     }
@@ -677,18 +1149,37 @@
   document.addEventListener('input', (e) => {
     const t = e.target;
     if (t.dataset && t.dataset.progress) { const o = $('#progOut'); if (o) o.textContent = t.value + '%'; return; }
+    if (t.dataset && t.dataset.multiq) { multi.q = t.value; multi.shown = 60; refreshMulti(); return; }
     if (t.dataset && t.dataset.bind) { ui[t.dataset.bind] = t.value; const lb = $('#listBox'); if (lb && t.type === 'search') lb.innerHTML = route().name === 'journal' ? journalList() : libraryList(); }
   });
   document.addEventListener('change', (e) => {
     const t = e.target;
     if (t.dataset && t.dataset.progress) { const id = t.dataset.progress, v = Math.round(+t.value); mutate((s) => { const g = gameById2(s, id); g.progress = v; g.updatedAt = Date.now(); }); return; }
+    if (t.dataset && t.dataset.date) { const id = t.dataset.id, k = t.dataset.date, v = /^\d{4}-\d{2}-\d{2}$/.test(t.value) ? t.value : ''; mutate((s) => { const g = gameById2(s, id); g[k] = v; g.updatedAt = Date.now(); }); return; }
+    if (t.dataset && t.dataset.pickopt) { if (t.dataset.pickopt === 'plat') { multi.pref = t.value; lsSet(LS_PREF, t.value); } else multi.status = t.value; return; }
     if (t.dataset && t.dataset.bind && t.tagName === 'SELECT') { ui[t.dataset.bind] = t.value; const lb = $('#listBox'); if (lb) lb.innerHTML = libraryList(); return; }
+    if (t.dataset && t.dataset.cover && t.files && t.files[0]) { const f = t.files[0], id = t.dataset.cover; t.value = ''; setCoverFromFile(id, f); return; }
     if (t.id === 'fileIn' && t.files && t.files[0]) {
       const f = t.files[0]; t.value = '';
       f.text().then((txt) => showImport(parseBackup(txt))).catch((err) => toast(err.message || 'Could not read that file', true));
     }
   });
   window.addEventListener('hashchange', () => { closeSheet(); render(); });
+
+  // ───────────────────────── updates ─────────────────────────
+  let updateSeen = false;
+  async function checkUpdate() {
+    if (!('serviceWorker' in navigator)) return toast('Updates need the installed app', true);
+    if (navigator.onLine === false) return toast('You’re offline – connect to the internet and try again', true);
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) return toast('The app isn’t installed for offline use yet', true);
+      toast('Checking for updates…');
+      updateSeen = false;
+      await reg.update();
+      setTimeout(() => { if (!updateSeen) toast(`You have the latest version (${APP_VERSION}, ${CATALOG.length} games in the list)`); }, 4000);
+    } catch (e) { toast('Could not check for updates right now', true); }
+  }
 
   // ───────────────────────── boot ─────────────────────────
   async function boot() {
@@ -697,10 +1188,15 @@
     if (storage.recovered) toast('Restored your journal from the safety copy');
     askPersist().then(() => { if (route().name === 'backup') render(); });
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js').catch((e) => console.warn('Service worker not registered:', e));
+      let hadController = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!hadController) { hadController = true; return; } // first install, not an update
+        updateSeen = true; ui.updated = true; renderBanners(); toast('Updated! Reload to use the new version');
+      });
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch((e) => console.warn('Service worker not registered:', e));
     }
   }
   // test hook (read-only helpers, harmless in production)
-  window.__savePoint = { get state() { return state; }, storage, parseBackup };
+  window.__savePoint = { get state() { return state; }, storage, parseBackup, CATALOG, APP_VERSION };
   boot();
 })();
