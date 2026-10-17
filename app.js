@@ -7,9 +7,9 @@
   const DB_NAME = 'save-point', STORE = 'kv', KEY = 'state', UNDO_KEY = 'undo';
   const LS_MIRROR = 'savepoint.mirror.v1', LS_UNDO = 'savepoint.undo.v1', LS_DRAFT = 'savepoint.draft.';
   const FORMAT = 2;
-  const APP_VERSION = 'v4.3';
+  const APP_VERSION = 'v4.4';
   const COVERS_KEY = 'covers';
-  const LS_PREF = 'savepoint.pickplat', LS_AUTOCOVER = 'savepoint.autocover';
+  const LS_PREF = 'savepoint.pickplat', LS_AUTOCOVER = 'savepoint.autocover', LS_CONFIRM = 'savepoint.confirmcovers';
   const PLATFORMS = ['PS5', 'PS4', 'PC', 'Xbox', 'Switch', 'Mobile', 'Other'];
   const STATUSES = [
     { id: 'want', label: 'Want to Play' }, { id: 'playing', label: 'Playing' },
@@ -410,7 +410,7 @@
   // The app ships no copyrighted art. Your phone asks Wikipedia for each game's article by its exact title
   // (several likely spellings per game, checked in ONE request for ~14 games), keeps only articles that are
   // described as games, downloads the cover thumbnail, shrinks it and stores it on the device.
-  const WIKI = 'https://en.wikipedia.org/w/api.php?format=json&origin=*&action=query&redirects=1&prop=pageimages%7Cdescription&piprop=thumbnail&';
+  const WIKI = 'https://en.wikipedia.org/w/api.php?format=json&origin=*&action=query&redirects=1&prop=pageimages%7Cdescription&piprop=thumbnail&pilicense=any&';
   const wikiBase = (t) => normKey(String(t).replace(/\s*\([^)]*\)\s*$/, ''));
   const isGamePage = (t) => { const m = /\(([^)]*)\)\s*$/.exec(String(t)); return !m || /video game/i.test(m[1]); };
   const isGameDesc = (d) => /video game|computer game|mobile game/i.test(d) || (/\bgame\b/i.test(d) && !/board game|card game|tabletop|party game|game show/i.test(d));
@@ -420,6 +420,15 @@
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms || 15000);
     try { const r = await fetch(url, { signal: ctl.signal, referrerPolicy: 'no-referrer' }); if (!r.ok) throw new Error('HTTP ' + r.status); return r; }
     finally { clearTimeout(t); }
+  }
+  /** Download a thumbnail, backing off and retrying when Wikimedia says "slow down" (429) or hiccups (5xx). */
+  async function fetchThumb(src) {
+    let last;
+    for (let i = 0; i < 3; i++) {
+      try { return await (await timedFetch(src, 20000)).blob(); }
+      catch (e) { last = e; covq.lastError = String((e && e.message) || e).slice(0, 80); if (!/HTTP (429|5\d\d)/.test(String(e && e.message)) && !(e && e.name === 'AbortError')) break; await sleep(i ? 4000 : 1500); }
+    }
+    throw last;
   }
   const okThumb = (src) => typeof src === 'string' && /^https:\/\/upload\.wikimedia\.org\//.test(src);
 
@@ -432,21 +441,22 @@
     return out.slice(0, 6);
   }
   /** One request for many games. Returns, for each entry, {src,title} or null. */
-  async function wikiLookup(batch) {
+  async function wikiLookup(batch, wantAll) {
     const vars = batch.map((e) => titleVariants(e.title, e.date)), all = [...new Set(vars.flat())];
-    const url = WIKI + 'pithumbsize=320&titles=' + all.map(encodeURIComponent).join('%7C');
+    const url = WIKI + 'pithumbsize=330&titles=' + all.map(encodeURIComponent).join('%7C');
     const q = ((await (await timedFetch(url, 20000)).json()) || {}).query || {};
     const step = new Map(); (q.normalized || []).forEach((n) => step.set(n.from, n.to)); (q.redirects || []).forEach((r) => step.set(r.from, r.to));
     const resolve = (v) => { let c = v, n = 0; while (step.has(c) && n++ < 6) c = step.get(c); return c; };
     const byTitle = new Map(); Object.values(q.pages || {}).forEach((p) => { if (p && typeof p.title === 'string') byTitle.set(p.title, p); });
     return vars.map((vs) => {
+      const hits = [];
       for (const v of vs) {
         const pg = byTitle.get(resolve(v));
         if (!pg || pg.missing !== undefined || !pg.thumbnail || !okThumb(pg.thumbnail.source)) continue;
         const ok = typeof pg.description === 'string' && pg.description ? isGameDesc(pg.description) : /video game/i.test(v);
-        if (ok) return { src: pg.thumbnail.source, title: pg.title };
+        if (ok && !hits.some((h) => h.src === pg.thumbnail.source)) { hits.push({ src: pg.thumbnail.source, title: pg.title }); if (!wantAll) break; }
       }
-      return null;
+      return wantAll ? hits : hits[0] || null;
     });
   }
 
@@ -458,7 +468,7 @@
     try {
       const range = IDBKeyRange.bound(CC, CC + '￿'), st = db.transaction(STORE, 'readonly').objectStore(STORE);
       const [keys, vals] = await Promise.all([idbReq(st.getAllKeys(range)), idbReq(st.getAll(range))]);
-      keys.forEach((k, i) => { const key = String(k).slice(CC.length), v = vals[i]; if (v && typeof v.u === 'string' && COVER_RE.test(v.u)) cat.set(key, v.u); else if (v && v.m) catMiss.set(key, +v.t || 0); });
+      keys.forEach((k, i) => { const key = String(k).slice(CC.length), v = vals[i]; if (v && typeof v.u === 'string' && COVER_RE.test(v.u)) cat.set(key, v.u); else if (v && v.m && v.v >= 2) catMiss.set(key, +v.t || 0); });
     } catch (e) { console.warn('cover cache not loaded', e); }
     refreshCoverEls(); if (route().name === 'backup') render();
   }
@@ -474,7 +484,7 @@
   const cacheBytes = () => { let n = 0; cat.forEach((v) => { n += v.length; }); return n; };
 
   // background queue
-  const covq = { queue: [], queued: new Set(), running: false, cancel: false, found: 0, missed: 0, failed: 0, total: 0, gap: 250, paused: '', onProgress: null };
+  const covq = { queue: [], queued: new Set(), running: false, cancel: false, found: 0, missed: 0, failed: 0, total: 0, gap: 250, paused: '', lastError: '', onProgress: null };
   const needsCover = (key) => key && !cat.has(key) && !covq.queued.has(key) && !(catMiss.has(key) && Date.now() - catMiss.get(key) < 21 * 86400000);
   const entryOf = (title, date) => ({ key: normKey(title), title, date: date || '' });
   function enqueueCovers(entries, force) {
@@ -495,18 +505,18 @@
         let results;
         try { results = await wikiLookup(batch); apiFails = 0; }
         catch (e) {
-          apiFails++; covq.failed += batch.length; batch.forEach((x) => covq.queued.delete(x.key));
+          apiFails++; covq.failed += batch.length; covq.lastError = String((e && e.message) || e).slice(0, 80); batch.forEach((x) => covq.queued.delete(x.key));
           if (apiFails >= 3) { covq.paused = 'unreachable'; break; }
           await sleep(1500); continue;
         }
         const puts = [];
-        for (let i = 0; i < batch.length; i += 4) {
-          await Promise.all(batch.slice(i, i + 4).map(async (e, j) => {
+        for (let i = 0; i < batch.length; i += 3) {
+          await Promise.all(batch.slice(i, i + 3).map(async (e, j) => {
             const hit = results[i + j];
             try {
-              if (hit) { const url = await fileToCover(await (await timedFetch(hit.src, 20000)).blob(), 240, 320, 0.72); cat.set(e.key, url); catMiss.delete(e.key); puts.push([e.key, { u: url, t: Date.now() }]); covq.found++; }
-              else { catMiss.set(e.key, Date.now()); puts.push([e.key, { m: 1, t: Date.now() }]); covq.missed++; }
-            } catch (err) { covq.failed++; }
+              if (hit) { const url = await fileToCover(await fetchThumb(hit.src), 240, 320, 0.72); cat.set(e.key, url); catMiss.delete(e.key); puts.push([e.key, { u: url, t: Date.now() }]); covq.found++; }
+              else { catMiss.set(e.key, Date.now()); puts.push([e.key, { m: 1, v: 2, t: Date.now() }]); covq.missed++; }
+            } catch (err) { covq.failed++; covq.lastError = String((err && err.message) || err).slice(0, 80); }
             covq.queued.delete(e.key);
           }));
         }
@@ -533,7 +543,7 @@
       const checked = covq.found + covq.missed + covq.failed, pct = covq.total ? Math.min(100, Math.round((checked / covq.total) * 100)) : 100;
       el.innerHTML = `<div class="bar"><i style="width:${pct}%"></i></div>
         <p style="margin:12px 0 4px"><b>${covq.found}</b> covers saved · ${checked} of ${covq.total} checked</p>
-        ${done ? `<p class="muted small">${covq.paused === 'unreachable' ? 'Couldn’t reach Wikipedia, so this stopped. Try again later. ' : covq.paused === 'offline' ? 'You went offline. Run it again when you’re back online. ' : covq.cancel ? 'Stopped. Run it again to continue where it left off. ' : ''}${covq.missed ? `${plural(covq.missed, 'game')} had no clear article and keep the generated cover. ` : ''}${covq.failed ? `${plural(covq.failed, 'download')} failed; run it again to retry.` : ''}</p>` : '<p class="muted small">Keep this open. You can stop any time and continue later.</p>'}`;
+        ${done ? `<p class="muted small">${covq.paused === 'unreachable' ? 'Couldn’t reach Wikipedia, so this stopped. Try again later. ' : covq.paused === 'offline' ? 'You went offline. Run it again when you’re back online. ' : covq.cancel ? 'Stopped. Run it again to continue where it left off. ' : ''}${covq.missed ? `${plural(covq.missed, 'game')} had no clear article and keep the generated cover. ` : ''}${covq.failed ? `${plural(covq.failed, 'lookup/download')} failed${covq.lastError ? ` (last problem: ${esc(covq.lastError)})` : ''}; run it again to retry, or use “Review covers one by one”.` : ''}</p>` : '<p class="muted small">Keep this open. You can stop any time and continue later.</p>'}`;
       if (done) { const b = $('#cstop'); if (b) { b.textContent = 'Done'; b.dataset.act = 'close-sheet'; } }
     };
     covq.onProgress = paint;
@@ -541,40 +551,81 @@
     enqueueCovers(entries, true); paint(!covq.running);
   }
 
-  // single game: let the user pick the right article by hand
-  const WIKI_SEARCH = 'https://en.wikipedia.org/w/api.php?format=json&origin=*&action=query&redirects=1&generator=search&gsrlimit=6&prop=pageimages&piprop=thumbnail&pithumbsize=480&gsrsearch=';
+  // ── confirm covers by eye: show the candidate, you say yes/no, only then it is downloaded and pinned to the game ──
+  const WIKI_SEARCH = 'https://en.wikipedia.org/w/api.php?format=json&origin=*&action=query&redirects=1&generator=search&gsrlimit=6&prop=pageimages%7Cdescription&piprop=thumbnail&pilicense=any&pithumbsize=500&gsrsearch=';
   async function wikiSearch(title) {
     const j = await (await timedFetch(WIKI_SEARCH + encodeURIComponent(title + ' video game'), 12000)).json();
     const pages = Object.values((j && j.query && j.query.pages) || {}).filter((p) => p && p.thumbnail && okThumb(p.thumbnail.source));
-    return pages.sort((a, b) => (a.index || 0) - (b.index || 0)).map((p) => ({ title: String(p.title || '').slice(0, 120), src: p.thumbnail.source }));
+    const rank = (p) => (typeof p.description === 'string' && isGameDesc(p.description) ? 0 : 1);
+    return pages.sort((a, b) => rank(a) - rank(b) || (a.index || 0) - (b.index || 0)).map((p) => ({ title: String(p.title || '').slice(0, 120), src: p.thumbnail.source }));
   }
   async function fetchCoverFor(cand) {
     if (!okThumb(cand.src)) throw new Error('blocked source');
-    return fileToCover(await (await timedFetch(cand.src, 20000)).blob());
+    return fileToCover(await fetchThumb(cand.src));
   }
-  let coverCands = [];
-  async function findCoverOnline(id) {
-    const g = gameById(id); if (!g) return;
-    openSheet(`<h2>Find cover online</h2><p class="muted small">${esc(g.title)}</p><div id="candBox"><p class="muted" style="margin:18px 0">Searching…</p></div><div class="actions"><button class="btn" data-act="close-sheet">Close</button></div>`);
-    const box = () => $('#candBox');
-    if (navigator.onLine === false) { if (box()) box().innerHTML = '<p class="muted" style="margin:18px 0">You’re offline. Connect to the internet and try again.</p>'; return; }
-    try {
-      coverCands = (await wikiSearch(g.title)).slice(0, 4); coverCands.forEach((c) => { c.gameId = id; });
-      if (!box()) return;
-      box().innerHTML = coverCands.length
-        ? `<p class="muted small" style="margin:10px 0 4px">Tap the right one:</p>` + coverCands.map((c, i) => `<button type="button" class="cand" data-act="use-cand" data-i="${i}"><img src="${esc(c.src)}" alt="" referrerpolicy="no-referrer"><span>${esc(c.title)}</span></button>`).join('')
-        : '<p class="muted" style="margin:18px 0">No cover found for that title. You can still use your own photo.</p>';
-    } catch (e) { if (box()) box().innerHTML = '<p class="muted" style="margin:18px 0">Couldn’t reach the cover service right now. Try again later, or use your own photo.</p>'; }
+  const wikiUrl = (t) => 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String(t).replace(/ /g, '_'));
+  /** Best guesses first (exact-title articles), then plain search results. */
+  async function wikiCandidates(item) {
+    const out = [], seen = new Set(), push = (c) => { const k = c && String(c.title).toLowerCase(); if (c && !seen.has(k) && !seen.has(c.src)) { seen.add(k); seen.add(c.src); out.push(c); } };
+    let failed = false;
+    try { (await wikiLookup([{ title: item.title, date: item.date }], true))[0].forEach(push); } catch (e) { failed = true; }
+    if (out.length < 3) { try { (await wikiSearch(item.title)).forEach(push); failed = false; } catch (e) { if (!out.length) failed = true; } }
+    if (!out.length && failed) throw new Error('unreachable');
+    return out.slice(0, 6);
   }
-  async function useCandidate(i) {
-    const c = coverCands[i]; if (!c) return; const id = c.gameId;
-    const b = $('#candBox'); if (b) b.innerHTML = '<p class="muted" style="margin:18px 0">Saving cover…</p>';
+  const rv = { items: [], i: 0, saved: 0, cands: new Map() };
+  const confirmAfterAdd = () => lsGet(LS_CONFIRM) !== '0';
+  const rvItem = (g) => { const c = CATALOG_BY_KEY.get(normKey(g.title)); return { id: g.id, title: g.title, platform: g.platform, date: c ? c.date : '' }; };
+  function startReview(items) {
+    if (!db) return toast('Covers need device storage, which this browser has blocked', true);
+    if (navigator.onLine === false) return toast('Connect to the internet first', true);
+    if (!items.length) return toast('Nothing to review');
+    rv.items = items; rv.i = 0; rv.saved = 0; rv.cands = new Map();
+    openSheet('<div id="rvBox"></div>'); showReview();
+  }
+  function rvLoad(item) {
+    if (!rv.cands.has(item.id)) rv.cands.set(item.id, wikiCandidates(item).then((list) => ({ list, ci: 0 })).catch(() => ({ list: [], ci: 0, err: true })));
+    return rv.cands.get(item.id);
+  }
+  async function showReview() {
+    const box = () => $('#rvBox'); if (!box()) return;
+    const it = rv.items[rv.i], n = rv.items.length;
+    if (!it) { box().innerHTML = `<h2>All done</h2><p class="muted" style="margin:10px 0">${rv.saved ? `${plural(rv.saved, 'cover')} saved to your games.` : 'No covers were saved.'}</p><div class="actions"><button class="btn primary" data-act="close-sheet">Close</button></div>`; if (rv.saved) toast(`Saved ${plural(rv.saved, 'cover')}`); return; }
+    box().innerHTML = `<h2>Finding cover…</h2><p class="muted small">${rv.i + 1} of ${n} · ${esc(it.title)}</p><p class="muted" style="margin:24px 0">Searching Wikipedia…</p><div class="actions"><button class="btn" data-act="close-sheet">Stop</button></div>`;
+    const st = await rvLoad(it); if (!box() || rv.items[rv.i] !== it) return;
+    if (rv.items[rv.i + 1]) rvLoad(rv.items[rv.i + 1]);
+    const c = st.list[st.ci], head = `<p class="muted small">${rv.i + 1} of ${n} · <b>${esc(it.title)}</b> · ${esc(it.platform || '')}</p>`;
+    const imgSearch = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(it.title + ' video game cover')}`;
+    if (!c) {
+      box().innerHTML = `<h2>${st.err ? 'Couldn’t reach Wikipedia' : 'No cover found'}</h2>${head}
+        <p class="muted small" style="margin:12px 0">${st.err ? 'Check your connection and try again later.' : 'You can search for the picture yourself, save it to your photos, then pick it here.'}</p>
+        <div class="actions col"><a class="btn" href="${esc(imgSearch)}" target="_blank" rel="noopener noreferrer">Search images ↗</a><button class="btn" data-act="rv-photo">Pick a photo from my phone</button><button class="btn" data-act="rv-skip">Skip this game</button><button class="btn" data-act="close-sheet">Stop</button></div>
+        <input id="rvFile" type="file" accept="image/*" hidden data-rvphoto="1">`;
+      return;
+    }
+    box().innerHTML = `<h2>Is this the cover?</h2>${head}
+      <div class="rv-img"><img src="${esc(c.src)}" alt="Candidate cover for ${esc(it.title)}" referrerpolicy="no-referrer"></div>
+      <p class="muted small" style="text-align:center">Found: <a href="${esc(wikiUrl(c.title))}" target="_blank" rel="noopener noreferrer">${esc(c.title)} ↗</a></p>
+      <div class="actions col"><button class="btn primary" data-act="rv-yes">Yes, use this cover</button>
+      <button class="btn" data-act="rv-next" ${st.ci + 1 < st.list.length ? '' : 'disabled'}>Not this one${st.ci + 1 < st.list.length ? ` (${st.list.length - st.ci - 1} more)` : ''}</button>
+      <div class="row"><button class="btn" data-act="rv-skip">Skip game</button><a class="btn" href="${esc(imgSearch)}" target="_blank" rel="noopener noreferrer">Search images ↗</a></div>
+      <button class="btn" data-act="close-sheet">Stop</button></div>
+      <input id="rvFile" type="file" accept="image/*" hidden data-rvphoto="1">`;
+  }
+  async function rvYes() {
+    const it = rv.items[rv.i], st = it && (await rvLoad(it)), c = st && st.list[st.ci]; if (!c) return;
+    const b = $('#rvBox'); if (b) b.querySelectorAll('button').forEach((x) => { x.disabled = true; });
     try {
-      if (!db) throw new Error('no storage');
-      const url = await fetchCoverFor(c), prev = covers[id]; covers[id] = url;
-      if (!(await saveCovers())) { if (prev) covers[id] = prev; else delete covers[id]; closeSheet(); return; }
-      closeSheet(); await mutate((s) => { const g = gameById2(s, id); if (g) g.updatedAt = Date.now(); }, 'Cover saved');
-    } catch (e) { if ($('#candBox')) $('#candBox').innerHTML = '<p class="muted" style="margin:18px 0">Couldn’t download that cover. Try another one, or use your own photo.</p>'; }
+      const url = await fetchCoverFor(c), prev = covers[it.id]; covers[it.id] = url;
+      if (!(await saveCovers())) { if (prev) covers[it.id] = prev; else delete covers[it.id]; return showReview(); }
+      rv.saved++; await mutate((s) => { const g = gameById2(s, it.id); if (g) g.updatedAt = Date.now(); }, null);
+      rv.i++; showReview();
+    } catch (e) { toast('Couldn’t download that one. Try another.', true); st.list.splice(st.ci, 1); if (st.ci >= st.list.length) st.ci = 0; showReview(); }
+  }
+  async function rvPhoto(file) {
+    const it = rv.items[rv.i]; if (!it) return;
+    try { covers[it.id] = await fileToCover(file); await saveCovers(); rv.saved++; await mutate((s) => { const g = gameById2(s, it.id); if (g) g.updatedAt = Date.now(); }, null); rv.i++; showReview(); }
+    catch (e) { toast('Could not use that picture. Try a different one.', true); }
   }
 
   // ───────────────────────── built-in game list (autocomplete) ─────────────────────────
@@ -967,8 +1018,10 @@
       <div class="card">
         <h3 class="ct">Cover art</h3>
         <div class="kv"><span>Covers saved on this phone</span><span>${cat.size} <span class="muted">(${(cacheBytes() / 1048576).toFixed(1)} MB)</span></span></div>
+        <label class="check"><input type="checkbox" data-confirmcovers="1" ${confirmAfterAdd() ? 'checked' : ''}><span>Ask me to confirm covers after adding games<small>Shows the cover Wikipedia has, with a link; it is only saved if you tap Yes.</small></span></label>
         <label class="check"><input type="checkbox" data-autocover="1" ${autoCovers() ? 'checked' : ''}><span>Load cover art automatically<small>Sends game titles to Wikipedia to find covers. Off = generated covers only.</small></span></label>
         <div class="stack" style="margin-top:12px">
+          <button class="btn block" data-act="review-covers" ${state.games.some((g) => !covers[g.id]) ? '' : 'disabled'}>Review covers for my games one by one</button>
           <button class="btn block" data-act="cover-job-all">Download covers for the whole game list</button>
           <button class="btn block" data-act="clear-cover-cache" ${cat.size || catMiss.size ? '' : 'disabled'}>Clear cover cache</button>
           <p class="muted small">Covers are fetched once, then work offline. They are not part of backup files (they can be downloaded again); photos you choose yourself are.</p>
@@ -1147,6 +1200,7 @@
     multi.sel = new Map();
     enqueueCovers(libraryCoverEntries());
     location.hash = '#/library';
+    if (confirmAfterAdd() && db && navigator.onLine !== false) { await sleep(150); if (!$('#sheet')) startReview(games.map(rvItem)); }
   }
 
   function noteForm(gameId, note) {
@@ -1202,8 +1256,12 @@
     'clear-date': (t) => { const id = t.dataset.id, k = t.dataset.k; mutate((s) => { const g = gameById2(s, id); g[k] = ''; g.updatedAt = Date.now(); }); },
     'share-card': (t) => openShareCard(t.dataset.id),
     'do-share-card': () => doShareCard(),
-    'find-cover': (t) => findCoverOnline(t.dataset.id),
-    'use-cand': (t) => useCandidate(+t.dataset.i),
+    'find-cover': (t) => { const g = gameById(t.dataset.id); if (g) startReview([rvItem(g)]); },
+    'review-covers': () => startReview(state.games.filter((g) => !covers[g.id]).map(rvItem)),
+    'rv-yes': () => rvYes(),
+    'rv-next': async () => { const it = rv.items[rv.i], st = it && (await rvLoad(it)); if (st && st.ci + 1 < st.list.length) { st.ci++; showReview(); } },
+    'rv-skip': () => { rv.i++; showReview(); },
+    'rv-photo': () => { const f = $('#rvFile'); if (f) f.click(); },
     'fetch-all-covers': () => startCoverJob('library'),
     'cover-job-all': () => startCoverJob('all'),
     'stop-cover-job': () => { covq.cancel = true; const b = $('#cstop'); if (b) b.textContent = 'Stopping…'; },
@@ -1274,6 +1332,8 @@
     if (t.dataset && t.dataset.date) { const id = t.dataset.id, k = t.dataset.date, v = /^\d{4}-\d{2}-\d{2}$/.test(t.value) ? t.value : ''; mutate((s) => { const g = gameById2(s, id); g[k] = v; g.updatedAt = Date.now(); }); return; }
     if (t.dataset && t.dataset.pickopt) { if (t.dataset.pickopt === 'plat') { multi.pref = t.value; lsSet(LS_PREF, t.value); } else multi.status = t.value; return; }
     if (t.dataset && t.dataset.bind && t.tagName === 'SELECT') { ui[t.dataset.bind] = t.value; const lb = $('#listBox'); if (lb) lb.innerHTML = libraryList(); return; }
+    if (t.dataset && t.dataset.rvphoto && t.files && t.files[0]) { const f = t.files[0]; t.value = ''; rvPhoto(f); return; }
+    if (t.dataset && t.dataset.confirmcovers) { lsSet(LS_CONFIRM, t.checked ? '1' : '0'); toast(t.checked ? 'You’ll be asked to confirm covers after adding games' : 'Covers will not be confirmed after adding'); return; }
     if (t.dataset && t.dataset.autocover) { lsSet(LS_AUTOCOVER, t.checked ? '1' : '0'); if (t.checked) enqueueCovers(libraryCoverEntries()); toast(t.checked ? 'Covers will load automatically' : 'Automatic cover loading is off'); return; }
     if (t.dataset && t.dataset.cover && t.files && t.files[0]) { const f = t.files[0], id = t.dataset.cover; t.value = ''; setCoverFromFile(id, f); return; }
     if (t.id === 'fileIn' && t.files && t.files[0]) {
@@ -1332,6 +1392,6 @@
     }
   }
   // test hook (read-only helpers, harmless in production)
-  window.__savePoint = { get state() { return state; }, storage, parseBackup, CATALOG, APP_VERSION, covq, cat, catMiss, titleVariants };
+  window.__savePoint = { get state() { return state; }, get covers() { return covers; }, storage, parseBackup, CATALOG, APP_VERSION, covq, cat, catMiss, titleVariants };
   boot();
 })();

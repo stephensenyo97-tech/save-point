@@ -320,3 +320,8 @@ a.card.game.withcover { display: flex; gap: 14px; align-items: stretch; }
 .check input { width: 24px; height: 24px; accent-color: var(--cyan); flex: none; margin-top: 2px; }
 .check span { font-weight: 700; }
 .check small { display: block; font-weight: 500; color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+/* ── v4.4: confirm covers ── */
+.rv-img { display: flex; justify-content: center; margin: 14px 0 10px; }
+.rv-img img { max-height: 44vh; max-width: 70%; border-radius: 14px; border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.45); background: var(--surface2); min-height: 120px; }
+.sheet a.btn { text-decoration: none; }
