@@ -7,9 +7,9 @@
   const DB_NAME = 'save-point', STORE = 'kv', KEY = 'state', UNDO_KEY = 'undo';
   const LS_MIRROR = 'savepoint.mirror.v1', LS_UNDO = 'savepoint.undo.v1', LS_DRAFT = 'savepoint.draft.';
   const FORMAT = 2;
-  const APP_VERSION = 'v4.1';
+  const APP_VERSION = 'v4.2';
   const COVERS_KEY = 'covers';
-  const LS_PREF = 'savepoint.pickplat';
+  const LS_PREF = 'savepoint.pickplat', LS_AUTOCOVER = 'savepoint.autocover';
   const PLATFORMS = ['PS5', 'PS4', 'PC', 'Xbox', 'Switch', 'Mobile', 'Other'];
   const STATUSES = [
     { id: 'want', label: 'Want to Play' }, { id: 'playing', label: 'Playing' },
@@ -107,6 +107,7 @@
   let db = null;
   const storage = { mode: 'none', idbOk: false, lsOk: false, lastSavedAt: null, persisted: null, lastError: '' };
   let state = freshState();
+  const cat = new Map(), catMiss = new Map(); // cover cache for the built-in list: normalised title -> small JPEG data URL / time of last miss
   let covers = Object.create(null); // gameId -> small JPEG data URL (your own photos), kept in IndexedDB
 
   function openDB() {
@@ -353,8 +354,12 @@
     }
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400" preserveAspectRatio="xMidYMid slice" role="img" aria-label="${esc(title)} cover" class="cv">${body}</svg>`;
   }
-  const coverHTML = (g, kind) => (covers[g.id] ? `<img class="cv" src="${covers[g.id]}" alt="${esc(g.title)} cover">` : coverSVG(g.title, g.platform, kind));
-  const thumbFor = (title) => coverSVG(title, '', 'thumb');
+  const coverHTML = (g, kind) => { const u = covers[g.id] || cat.get(normKey(g.title)); return u ? `<img class="cv" src="${u}" alt="${esc(g.title)} cover">` : coverSVG(g.title, g.platform, kind); };
+  const thumbFor = (title) => { const u = cat.get(normKey(title)); return u ? `<img class="cv" src="${u}" alt="">` : coverSVG(title, '', 'thumb'); };
+  /** Swap generated covers for real art in place, as it arrives. */
+  function refreshCoverEls() {
+    document.querySelectorAll('[data-ck]').forEach((el) => { const u = cat.get(el.dataset.ck); if (u && el.querySelector('svg.cv')) el.innerHTML = `<img class="cv" src="${u}" alt="">`; });
+  }
   const COVER_RE = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/;
   function cleanCovers(raw, ids) {
     const out = Object.create(null); if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
@@ -366,7 +371,7 @@
     try { await idbPut(COVERS_KEY, Object.assign({}, covers)); return true; }
     catch (e) { toast('⚠ Could not save the photo (device storage full?)', true); return false; }
   }
-  async function fileToCover(file) {
+  async function fileToCover(file, TW = 360, TH = 480, quality = 0.82) {
     if (file.size > 60 * 1024 * 1024) throw new Error('too big');
     let src, w, h;
     try { src = await createImageBitmap(file, { imageOrientation: 'from-image' }); w = src.width; h = src.height; }
@@ -375,10 +380,10 @@
       w = src.naturalWidth; h = src.naturalHeight;
     }
     if (!w || !h) throw new Error('bad image');
-    const TW = 360, TH = 480, c = document.createElement('canvas'); c.width = TW; c.height = TH;
+    const c = document.createElement('canvas'); c.width = TW; c.height = TH;
     const x = c.getContext('2d'), sc = Math.max(TW / w, TH / h), dw = w * sc, dh = h * sc;
     x.fillStyle = '#0a1322'; x.fillRect(0, 0, TW, TH); x.drawImage(src, (TW - dw) / 2, (TH - dh) / 2, dw, dh);
-    const url = c.toDataURL('image/jpeg', 0.82); if (!COVER_RE.test(url)) throw new Error('could not encode');
+    const url = c.toDataURL('image/jpeg', quality); if (!COVER_RE.test(url)) throw new Error('could not encode');
     return url;
   }
   async function setCoverFromFile(id, file) {
@@ -395,34 +400,159 @@
   }
   function loadImg(url) { return new Promise((res) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = url; }); }
   async function coverImageFor(g) {
-    if (covers[g.id]) return loadImg(covers[g.id]);
+    if (covers[g.id] || cat.get(normKey(g.title))) return loadImg(covers[g.id] || cat.get(normKey(g.title)));
     const svg = coverSVG(g.title, g.platform, 'full').replace('<svg ', '<svg width="600" height="800" ');
     return loadImg('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg));
   }
 
 
-  // ───────────────────────── real cover art, fetched by your phone (optional, needs internet) ─────────────────────────
-  // The app contains no copyrighted art. When you ask, your phone looks the game up on Wikipedia, downloads
-  // the cover thumbnail and keeps a small copy on the device. After that it works offline.
-  const WIKI_API = 'https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrlimit=6&prop=pageimages&piprop=thumbnail&pithumbsize=480&redirects=1&gsrsearch=';
+  // ───────────────────────── real cover art, fetched by your phone (needs internet, then works offline) ─────────────────────────
+  // The app ships no copyrighted art. Your phone asks Wikipedia for each game's article by its exact title
+  // (several likely spellings per game, checked in ONE request for ~14 games), keeps only articles that are
+  // described as games, downloads the cover thumbnail, shrinks it and stores it on the device.
+  const WIKI = 'https://en.wikipedia.org/w/api.php?format=json&origin=*&action=query&redirects=1&prop=pageimages%7Cdescription&piprop=thumbnail&';
   const wikiBase = (t) => normKey(String(t).replace(/\s*\([^)]*\)\s*$/, ''));
-  const isGamePage = (t) => { const m = /\(([^)]*)\)\s*$/.exec(String(t)); return !m || /video game/i.test(m[1]); }; // “Hades (mythology)” is not a match
+  const isGamePage = (t) => { const m = /\(([^)]*)\)\s*$/.exec(String(t)); return !m || /video game/i.test(m[1]); };
+  const isGameDesc = (d) => /video game|computer game|mobile game/i.test(d) || (/\bgame\b/i.test(d) && !/board game|card game|tabletop|party game|game show/i.test(d));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const autoCovers = () => lsGet(LS_AUTOCOVER) !== '0';
   async function timedFetch(url, ms) {
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms || 15000);
     try { const r = await fetch(url, { signal: ctl.signal, referrerPolicy: 'no-referrer' }); if (!r.ok) throw new Error('HTTP ' + r.status); return r; }
     finally { clearTimeout(t); }
   }
+  const okThumb = (src) => typeof src === 'string' && /^https:\/\/upload\.wikimedia\.org\//.test(src);
+
+  /** Likely Wikipedia article titles for a game, best first. */
+  function titleVariants(title, date) {
+    const t = String(title).replace(/[‘’]/g, "'").replace(/\s+/g, ' ').trim(), y = (/^(\d{4})/.exec(date || '') || [])[1] || '', out = [];
+    const add = (x) => { if (x && x.length < 200 && !/[|<>#[\]{}]/.test(x) && !out.includes(x)) out.push(x); };
+    const alt = /&/.test(t) ? t.replace(/\s*&\s*/g, ' and ') : /\band\b/.test(t) ? t.replace(/\band\b/g, '&') : '';
+    [t, alt].forEach((b) => { if (!b) return; if (y) add(`${b} (${y} video game)`); add(`${b} (video game)`); add(b); });
+    return out.slice(0, 6);
+  }
+  /** One request for many games. Returns, for each entry, {src,title} or null. */
+  async function wikiLookup(batch) {
+    const vars = batch.map((e) => titleVariants(e.title, e.date)), all = [...new Set(vars.flat())];
+    const url = WIKI + 'pithumbsize=320&titles=' + all.map(encodeURIComponent).join('%7C');
+    const q = ((await (await timedFetch(url, 20000)).json()) || {}).query || {};
+    const step = new Map(); (q.normalized || []).forEach((n) => step.set(n.from, n.to)); (q.redirects || []).forEach((r) => step.set(r.from, r.to));
+    const resolve = (v) => { let c = v, n = 0; while (step.has(c) && n++ < 6) c = step.get(c); return c; };
+    const byTitle = new Map(); Object.values(q.pages || {}).forEach((p) => { if (p && typeof p.title === 'string') byTitle.set(p.title, p); });
+    return vars.map((vs) => {
+      for (const v of vs) {
+        const pg = byTitle.get(resolve(v));
+        if (!pg || pg.missing !== undefined || !pg.thumbnail || !okThumb(pg.thumbnail.source)) continue;
+        const ok = typeof pg.description === 'string' && pg.description ? isGameDesc(pg.description) : /video game/i.test(v);
+        if (ok) return { src: pg.thumbnail.source, title: pg.title };
+      }
+      return null;
+    });
+  }
+
+  // cache of fetched covers: one IndexedDB entry per game ("cc:<title key>") in the existing store, so no schema change
+  const CC = 'cc:';
+  const idbReq = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  async function loadCoverCache() {
+    if (!db) return;
+    try {
+      const range = IDBKeyRange.bound(CC, CC + '￿'), st = db.transaction(STORE, 'readonly').objectStore(STORE);
+      const [keys, vals] = await Promise.all([idbReq(st.getAllKeys(range)), idbReq(st.getAll(range))]);
+      keys.forEach((k, i) => { const key = String(k).slice(CC.length), v = vals[i]; if (v && typeof v.u === 'string' && COVER_RE.test(v.u)) cat.set(key, v.u); else if (v && v.m) catMiss.set(key, +v.t || 0); });
+    } catch (e) { console.warn('cover cache not loaded', e); }
+    refreshCoverEls(); if (route().name === 'backup') render();
+  }
+  function ccPutMany(items) {
+    if (!db || !items.length) return Promise.resolve();
+    return new Promise((res, rej) => { const tx = db.transaction(STORE, 'readwrite'), st = tx.objectStore(STORE); items.forEach(([k, v]) => st.put(v, CC + k)); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error || new Error('aborted')); });
+  }
+  async function clearCoverCache() {
+    cat.clear(); catMiss.clear();
+    if (db) await new Promise((res) => { const tx = db.transaction(STORE, 'readwrite'); tx.objectStore(STORE).delete(IDBKeyRange.bound(CC, CC + '￿')); tx.oncomplete = () => res(); tx.onerror = () => res(); });
+    render(); toast('Cover cache cleared');
+  }
+  const cacheBytes = () => { let n = 0; cat.forEach((v) => { n += v.length; }); return n; };
+
+  // background queue
+  const covq = { queue: [], queued: new Set(), running: false, cancel: false, found: 0, missed: 0, failed: 0, total: 0, gap: 250, paused: '', onProgress: null };
+  const needsCover = (key) => key && !cat.has(key) && !covq.queued.has(key) && !(catMiss.has(key) && Date.now() - catMiss.get(key) < 21 * 86400000);
+  const entryOf = (title, date) => ({ key: normKey(title), title, date: date || '' });
+  function enqueueCovers(entries, force) {
+    if (!db || navigator.onLine === false || (!force && !autoCovers())) return 0;
+    let n = 0;
+    for (const e of entries) { if (!needsCover(e.key)) continue; covq.queue.push(e); covq.queued.add(e.key); n++; }
+    if (n) { if (!covq.running) { covq.found = covq.missed = covq.failed = 0; covq.paused = ''; covq.total = 0; } covq.total += n; runCovq(); }
+    return n;
+  }
+  const libraryCoverEntries = () => state.games.filter((g) => !covers[g.id]).map((g) => { const c = CATALOG_BY_KEY.get(normKey(g.title)); return entryOf(g.title, c && c.date); });
+  async function runCovq() {
+    if (covq.running) return; covq.running = true; covq.cancel = false; let apiFails = 0;
+    try {
+      while (covq.queue.length && !covq.cancel) {
+        if (navigator.onLine === false) { covq.paused = 'offline'; break; }
+        const batch = []; let titles = 0;
+        while (covq.queue.length && batch.length < 14) { const nt = titleVariants(covq.queue[0].title, covq.queue[0].date).length; if (batch.length && titles + nt > 48) break; batch.push(covq.queue.shift()); titles += nt; }
+        let results;
+        try { results = await wikiLookup(batch); apiFails = 0; }
+        catch (e) {
+          apiFails++; covq.failed += batch.length; batch.forEach((x) => covq.queued.delete(x.key));
+          if (apiFails >= 3) { covq.paused = 'unreachable'; break; }
+          await sleep(1500); continue;
+        }
+        const puts = [];
+        for (let i = 0; i < batch.length; i += 4) {
+          await Promise.all(batch.slice(i, i + 4).map(async (e, j) => {
+            const hit = results[i + j];
+            try {
+              if (hit) { const url = await fileToCover(await (await timedFetch(hit.src, 20000)).blob(), 240, 320, 0.72); cat.set(e.key, url); catMiss.delete(e.key); puts.push([e.key, { u: url, t: Date.now() }]); covq.found++; }
+              else { catMiss.set(e.key, Date.now()); puts.push([e.key, { m: 1, t: Date.now() }]); covq.missed++; }
+            } catch (err) { covq.failed++; }
+            covq.queued.delete(e.key);
+          }));
+        }
+        try { await ccPutMany(puts); } catch (e) { /* works this session, just won't persist */ }
+        refreshCoverEls(); if (covq.onProgress) covq.onProgress(false);
+        if (covq.gap) await sleep(covq.gap);
+      }
+    } finally {
+      covq.queue.splice(0).forEach((x) => covq.queued.delete(x.key)); covq.running = false;
+      if (covq.onProgress) covq.onProgress(true);
+      if (route().name === 'backup') render();
+    }
+  }
+  /** Foreground job with a progress sheet: scope 'library' (your games) or 'all' (the whole built-in list). */
+  function startCoverJob(scope) {
+    if (!db) return toast('Cover art needs device storage, which this browser has blocked', true);
+    if (navigator.onLine === false) return toast('Connect to the internet first', true);
+    const entries = scope === 'all' ? CATALOG.map((g) => entryOf(g.title, g.date)) : libraryCoverEntries();
+    const fresh = entries.filter((e) => needsCover(e.key)).length;
+    if (!fresh && !covq.running) return toast(scope === 'all' ? 'Every game in the list has already been checked' : 'Your games have all been checked already');
+    openSheet(`<h2>${scope === 'all' ? 'Covers for the whole list' : 'Covers for my games'}</h2><div id="cprog"></div><div class="actions"><button class="btn" id="cstop" data-act="stop-cover-job">Stop</button></div>`);
+    const paint = (done) => {
+      const el = $('#cprog'); if (!el) { covq.cancel = true; return; }
+      const checked = covq.found + covq.missed + covq.failed, pct = covq.total ? Math.min(100, Math.round((checked / covq.total) * 100)) : 100;
+      el.innerHTML = `<div class="bar"><i style="width:${pct}%"></i></div>
+        <p style="margin:12px 0 4px"><b>${covq.found}</b> covers saved · ${checked} of ${covq.total} checked</p>
+        ${done ? `<p class="muted small">${covq.paused === 'unreachable' ? 'Couldn’t reach Wikipedia, so this stopped. Try again later. ' : covq.paused === 'offline' ? 'You went offline. Run it again when you’re back online. ' : covq.cancel ? 'Stopped. Run it again to continue where it left off. ' : ''}${covq.missed ? `${plural(covq.missed, 'game')} had no clear article and keep the generated cover. ` : ''}${covq.failed ? `${plural(covq.failed, 'download')} failed; run it again to retry.` : ''}</p>` : '<p class="muted small">Keep this open. You can stop any time and continue later.</p>'}`;
+      if (done) { const b = $('#cstop'); if (b) { b.textContent = 'Done'; b.dataset.act = 'close-sheet'; } }
+    };
+    covq.onProgress = paint;
+    if (!covq.running) { covq.found = covq.missed = covq.failed = 0; covq.total = 0; covq.paused = ''; }
+    enqueueCovers(entries, true); paint(!covq.running);
+  }
+
+  // single game: let the user pick the right article by hand
+  const WIKI_SEARCH = 'https://en.wikipedia.org/w/api.php?format=json&origin=*&action=query&redirects=1&generator=search&gsrlimit=6&prop=pageimages&piprop=thumbnail&pithumbsize=480&gsrsearch=';
   async function wikiSearch(title) {
-    const j = await (await timedFetch(WIKI_API + encodeURIComponent(title + ' video game'), 12000)).json();
-    const pages = Object.values((j && j.query && j.query.pages) || {}).filter((p) => p && p.thumbnail && typeof p.thumbnail.source === 'string' && /^https:\/\/upload\.wikimedia\.org\//.test(p.thumbnail.source));
+    const j = await (await timedFetch(WIKI_SEARCH + encodeURIComponent(title + ' video game'), 12000)).json();
+    const pages = Object.values((j && j.query && j.query.pages) || {}).filter((p) => p && p.thumbnail && okThumb(p.thumbnail.source));
     return pages.sort((a, b) => (a.index || 0) - (b.index || 0)).map((p) => ({ title: String(p.title || '').slice(0, 120), src: p.thumbnail.source }));
   }
   async function fetchCoverFor(cand) {
-    if (!/^https:\/\/upload\.wikimedia\.org\//.test(cand.src)) throw new Error('blocked source');
+    if (!okThumb(cand.src)) throw new Error('blocked source');
     return fileToCover(await (await timedFetch(cand.src, 20000)).blob());
   }
-  let coverCands = [], batch = null;
+  let coverCands = [];
   async function findCoverOnline(id) {
     const g = gameById(id); if (!g) return;
     openSheet(`<h2>Find cover online</h2><p class="muted small">${esc(g.title)}</p><div id="candBox"><p class="muted" style="margin:18px 0">Searching…</p></div><div class="actions"><button class="btn" data-act="close-sheet">Close</button></div>`);
@@ -445,37 +575,6 @@
       if (!(await saveCovers())) { if (prev) covers[id] = prev; else delete covers[id]; closeSheet(); return; }
       closeSheet(); await mutate((s) => { const g = gameById2(s, id); if (g) g.updatedAt = Date.now(); }, 'Cover saved');
     } catch (e) { if ($('#candBox')) $('#candBox').innerHTML = '<p class="muted" style="margin:18px 0">Couldn’t download that cover. Try another one, or use your own photo.</p>'; }
-  }
-  async function batchCovers() {
-    const todo = state.games.filter((g) => !covers[g.id]);
-    if (!todo.length) return toast('Every game already has a photo cover');
-    if (!db) return toast('Photos need device storage, which this browser has blocked', true);
-    if (navigator.onLine === false) return toast('Connect to the internet first', true);
-    batch = { cancel: false, done: 0, found: 0, total: todo.length, missed: [], fails: 0 };
-    const b = batch;
-    const paint = (final) => { const el = $('#bprog'); if (!el) { b.cancel = true; return; }
-      el.innerHTML = `<div class="bar"><i style="width:${Math.round((b.done / b.total) * 100)}%"></i></div>
-        <p style="margin:12px 0 4px"><b>${b.found}</b> found · ${b.done} of ${b.total} checked</p>
-        ${final ? `<p class="muted small">${b.cancel && b.done < b.total ? 'Stopped. ' : ''}${b.fails >= 3 ? 'The cover service could not be reached, so this stopped early. ' : ''}${b.missed.length ? `${plural(b.missed.length, 'game')} had no clear match and keep the generated cover. Open one and tap “Find cover online” to pick by hand.` : ''}</p>` : '<p class="muted small">Keep this open. Only exact title matches are saved automatically.</p>'}`; };
-    openSheet(`<h2>Finding covers</h2><div id="bprog"></div><div class="actions"><button class="btn" id="bstop" data-act="stop-batch">Stop</button></div>`);
-    paint(false); let sinceSave = 0, consecutive = 0;
-    for (const g of todo) {
-      if (b.cancel) break;
-      try {
-        const res = await wikiSearch(g.title), key = normKey(g.title), hit = res.find((r) => wikiBase(r.title) === key && isGamePage(r.title));
-        consecutive = 0;
-        if (hit) { covers[g.id] = await fetchCoverFor(hit); b.found++; sinceSave++; } else b.missed.push(g.title);
-      } catch (e) { b.fails++; consecutive++; b.missed.push(g.title); if (consecutive >= 3) { b.cancel = true; } }
-      b.done++; paint(false);
-      if (sinceSave >= 5) { sinceSave = 0; await saveCovers(); }
-      await sleep(120);
-    }
-    await saveCovers();
-    if (b.found) await mutate((s) => { s.games.forEach((x) => { if (covers[x.id]) x.updatedAt = Math.max(x.updatedAt, 1); }); }, null);
-    const bs = $('#bstop'); if (bs) { bs.textContent = 'Done'; bs.dataset.act = 'close-sheet'; }
-    paint(true); render();
-    if (b.found) toast(`Saved ${plural(b.found, 'cover')}`);
-    batch = null;
   }
 
   // ───────────────────────── built-in game list (autocomplete) ─────────────────────────
@@ -574,13 +673,13 @@
 
   function gameCard(g) {
     const n = notesOf(g.id).length;
-    return `<a class="card game withcover" href="#/game/${encodeURIComponent(g.id)}"><div class="gc-cover">${coverHTML(g, 'thumb')}</div><div class="gc-body">
+    return `<a class="card game withcover" href="#/game/${encodeURIComponent(g.id)}"><div class="gc-cover" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'thumb')}</div><div class="gc-body">
       <div class="g-top"><h3>${g.fav ? '<span class="heart" aria-label="Favorite">♥</span> ' : ''}${esc(g.title)}</h3><span class="pill st-${g.status}">${esc(statusLabel(g.status))}</span></div>
       <div class="g-meta"><span class="plat">${esc(g.platform)}</span><span>${plural(n, 'note')}</span>${g.rating ? `<span class="rate-badge">★ ${g.rating}/10</span>` : ''}${g.queue ? '<span class="queue-badge">Up next</span>' : ''}</div>
       <div class="bar"><i style="width:${g.progress}%"></i></div><div class="pct">${g.progress}%</div></div></a>`;
   }
   function queueCard(g) {
-    return `<div class="card qcard"><div class="gc-cover sm">${coverHTML(g, 'thumb')}</div><a href="#/game/${encodeURIComponent(g.id)}"><h3>${esc(g.title)}</h3><div class="g-meta" style="margin:4px 0 0"><span class="plat">${esc(g.platform)}</span></div></a><button class="btn sm primary" data-act="start-game" data-id="${esc(g.id)}">${icon('next')}Start</button></div>`;
+    return `<div class="card qcard"><div class="gc-cover sm" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'thumb')}</div><a href="#/game/${encodeURIComponent(g.id)}"><h3>${esc(g.title)}</h3><div class="g-meta" style="margin:4px 0 0"><span class="plat">${esc(g.platform)}</span></div></a><button class="btn sm primary" data-act="start-game" data-id="${esc(g.id)}">${icon('next')}Start</button></div>`;
   }
   function noteCard(n, { showGame = false, actions = false } = {}) {
     const g = gameById(n.gameId);
@@ -646,7 +745,7 @@
         <select data-bind="libPlat" aria-label="Platform"><option value="all">All platforms</option>${plats.map((p) => `<option ${ui.libPlat === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select>
         <select data-bind="libSort" aria-label="Sort"><option value="recent" ${ui.libSort === 'recent' ? 'selected' : ''}>Recently active</option><option value="title" ${ui.libSort === 'title' ? 'selected' : ''}>Title A–Z</option><option value="progress" ${ui.libSort === 'progress' ? 'selected' : ''}>Most complete</option><option value="rating" ${ui.libSort === 'rating' ? 'selected' : ''}>Highest rated</option></select>
       </div>
-      ${state.games.some((g) => !covers[g.id]) ? `<button class="btn sm block" data-act="fetch-all-covers" style="margin-top:12px">Find real covers online</button>` : ''}
+      ${state.games.some((g) => !covers[g.id]) ? `<button class="btn sm block" data-act="fetch-all-covers" style="margin-top:12px">Find covers for my games</button>` : ''}
       <div id="listBox">${libraryList()}</div>`
     };
   }
@@ -681,7 +780,7 @@
     return {
       title: esc(g.title), back: '#/library', fab: { label: 'Note', act: 'add-note', id: g.id }, html: `
       <div class="card">
-        <div class="hero"><div class="hero-cv">${coverHTML(g, 'full')}</div><div class="hero-side">
+        <div class="hero"><div class="hero-cv" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'full')}</div><div class="hero-side">
           <span class="plat">${esc(g.platform)}</span><span class="muted small">Added ${esc(fmtDate(dateStr(new Date(g.createdAt))))}</span>
           <button class="btn sm" data-act="find-cover" data-id="${esc(g.id)}">${icon('share')}Find cover online</button>
           <button class="btn sm" data-act="pick-cover">${icon('upload')}${covers[g.id] ? 'Change photo' : 'Use my photo'}</button>
@@ -866,6 +965,16 @@
         <div class="kv"><span>Running as installed app</span><span>${isStandalone() ? '<span class="ok">Yes</span>' : '<span class="warn">No – open from Home Screen icon</span>'}</span></div>
       </div>
       <div class="card">
+        <h3 class="ct">Cover art</h3>
+        <div class="kv"><span>Covers saved on this phone</span><span>${cat.size} <span class="muted">(${(cacheBytes() / 1048576).toFixed(1)} MB)</span></span></div>
+        <label class="check"><input type="checkbox" data-autocover="1" ${autoCovers() ? 'checked' : ''}><span>Load cover art automatically<small>Sends game titles to Wikipedia to find covers. Off = generated covers only.</small></span></label>
+        <div class="stack" style="margin-top:12px">
+          <button class="btn block" data-act="cover-job-all">Download covers for the whole game list</button>
+          <button class="btn block" data-act="clear-cover-cache" ${cat.size || catMiss.size ? '' : 'disabled'}>Clear cover cache</button>
+          <p class="muted small">Covers are fetched once, then work offline. They are not part of backup files (they can be downloaded again); photos you choose yourself are.</p>
+        </div>
+      </div>
+      <div class="card">
         <h3 class="ct">App version &amp; updates</h3>
         <div class="kv"><span>App version</span><span>${esc(APP_VERSION)}</span></div>
         <div class="kv"><span>Built-in game list</span><span>${CATALOG.length} games</span></div>
@@ -986,7 +1095,7 @@
     let html = slice.map((g) => {
       const on = multi.sel.has(g.key), inLib = lib.has(g.key), r = relInfo(g);
       const meta = [g.plats.join(' · '), r.label].filter(Boolean).join(' · ');
-      return `<button type="button" class="pick ${on ? 'on' : ''}" data-act="toggle-pick" data-k="${esc(g.key)}" ${inLib ? 'disabled' : ''} aria-pressed="${on}"><span class="tick">${CHECK}</span><span class="gc-cover xs">${thumbFor(g.title)}</span><span class="pk-main"><b>${esc(g.title)}</b><small>${esc(meta) || '&nbsp;'}</small></span>${inLib ? '<em>In library</em>' : r.upcoming ? '<em class="soon">Soon</em>' : ''}</button>`;
+      return `<button type="button" class="pick ${on ? 'on' : ''}" data-act="toggle-pick" data-k="${esc(g.key)}" ${inLib ? 'disabled' : ''} aria-pressed="${on}"><span class="tick">${CHECK}</span><span class="gc-cover xs" data-ck="${esc(g.key)}">${thumbFor(g.title)}</span><span class="pk-main"><b>${esc(g.title)}</b><small>${esc(meta) || '&nbsp;'}</small></span>${inLib ? '<em>In library</em>' : r.upcoming ? '<em class="soon">Soon</em>' : ''}</button>`;
     }).join('');
     if (all.length > slice.length) html += `<button type="button" class="btn block" data-act="pick-more" style="margin:8px 0">Show more (${all.length - slice.length} left)</button>`;
     if (!all.length) html += `<p class="muted pick-none">${searching ? 'No match in the built-in list.' : 'Nothing here yet.'}</p>`;
@@ -1007,6 +1116,7 @@
     const top = list.scrollTop;
     list.innerHTML = pickRows(); list.scrollTop = keepScroll ? top : 0;
     $('#pickChips').innerHTML = pickChips(); pickFoot();
+    enqueueCovers(multiEntries().slice(0, multi.shown).map((g) => entryOf(g.title, g.date)));
   }
   function multiAdd() {
     multi.q = ''; multi.mode = 'new'; multi.sel = new Map(); multi.shown = 60;
@@ -1033,6 +1143,7 @@
     ui.libStatus = 'all'; ui.libQ = ''; ui.libPlat = 'all'; ui.libSort = 'recent';
     await mutate((s) => { games.forEach((g) => s.games.push(g)); }, `Added ${plural(games.length, 'game')}`);
     multi.sel = new Map();
+    enqueueCovers(libraryCoverEntries());
     location.hash = '#/library';
   }
 
@@ -1091,8 +1202,10 @@
     'do-share-card': () => doShareCard(),
     'find-cover': (t) => findCoverOnline(t.dataset.id),
     'use-cand': (t) => useCandidate(+t.dataset.i),
-    'fetch-all-covers': () => batchCovers(),
-    'stop-batch': () => { if (batch) batch.cancel = true; const bs = $('#bstop'); if (bs) bs.textContent = 'Stopping…'; },
+    'fetch-all-covers': () => startCoverJob('library'),
+    'cover-job-all': () => startCoverJob('all'),
+    'stop-cover-job': () => { covq.cancel = true; const b = $('#cstop'); if (b) b.textContent = 'Stopping…'; },
+    'clear-cover-cache': () => clearCoverCache(),
     'pick-cover': () => { const f = $('#coverIn'); if (f) f.click(); },
     'clear-cover': (t) => clearCover(t.dataset.id),
     'check-update': () => checkUpdate(),
@@ -1158,6 +1271,7 @@
     if (t.dataset && t.dataset.date) { const id = t.dataset.id, k = t.dataset.date, v = /^\d{4}-\d{2}-\d{2}$/.test(t.value) ? t.value : ''; mutate((s) => { const g = gameById2(s, id); g[k] = v; g.updatedAt = Date.now(); }); return; }
     if (t.dataset && t.dataset.pickopt) { if (t.dataset.pickopt === 'plat') { multi.pref = t.value; lsSet(LS_PREF, t.value); } else multi.status = t.value; return; }
     if (t.dataset && t.dataset.bind && t.tagName === 'SELECT') { ui[t.dataset.bind] = t.value; const lb = $('#listBox'); if (lb) lb.innerHTML = libraryList(); return; }
+    if (t.dataset && t.dataset.autocover) { lsSet(LS_AUTOCOVER, t.checked ? '1' : '0'); if (t.checked) enqueueCovers(libraryCoverEntries()); toast(t.checked ? 'Covers will load automatically' : 'Automatic cover loading is off'); return; }
     if (t.dataset && t.dataset.cover && t.files && t.files[0]) { const f = t.files[0], id = t.dataset.cover; t.value = ''; setCoverFromFile(id, f); return; }
     if (t.id === 'fileIn' && t.files && t.files[0]) {
       const f = t.files[0]; t.value = '';
@@ -1185,6 +1299,8 @@
   async function boot() {
     await loadState();
     render(); renderBanners();
+    loadCoverCache().then(() => enqueueCovers(libraryCoverEntries()));
+    window.addEventListener('online', () => enqueueCovers(libraryCoverEntries()));
     if (storage.recovered) toast('Restored your journal from the safety copy');
     askPersist().then(() => { if (route().name === 'backup') render(); });
     if ('serviceWorker' in navigator) {
@@ -1197,6 +1313,6 @@
     }
   }
   // test hook (read-only helpers, harmless in production)
-  window.__savePoint = { get state() { return state; }, storage, parseBackup, CATALOG, APP_VERSION };
+  window.__savePoint = { get state() { return state; }, storage, parseBackup, CATALOG, APP_VERSION, covq, cat, catMiss, titleVariants };
   boot();
 })();

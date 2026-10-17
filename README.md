@@ -32,7 +32,7 @@ After this you can delete nothing and run nothing; the site just sits there.
 1. On your repo page: **Add file → Upload files**, drag in every file from this folder (including `games-catalog.js` and the `icons` folder), tick nothing else, **Commit changes**. Same names replace the old ones.
 2. Wait 1–2 minutes for GitHub Pages.
 3. On your phone, open Save Point **while online** → **Backup tab → App version & updates → Check for update**. If it says it was updated, tap **Reload**.
-4. The Backup tab shows the version (`v4.1`) and how many games are in the built-in list, so you can see you really got the new one. Your journal is never touched by an update.
+4. The Backup tab shows the version (`v4.2`) and how many games are in the built-in list, so you can see you really got the new one. Your journal is never touched by an update.
 
 To add games to the list yourself, edit `games-catalog.js` (one game per line, instructions at the top), bump `VERSION` in `sw.js`, and upload.
 
@@ -79,7 +79,9 @@ Tested in headless Chromium at iPhone size, served from a sub-folder like GitHub
 
 **v4 (covers) additionally tested:** every game gets a clean generated cover (same game = same cover every time, shown in the library, the add-games list, the game page and the share card); hostile titles can't inject anything; your own photo (cropped and shrunk to a small 360×480 JPEG), kept after reload, included in backups, restored by import and by Undo, removable, and non-pictures give a friendly error; bad photo data in a backup is rejected.
 
-**Real cover art (v4.1):** each game's page has **Find cover online**, and the Library has **Find real covers online**. Your phone searches Wikipedia, downloads the cover thumbnail and keeps a small copy, so after that it works offline. Bulk mode only saves exact title matches (e.g. it will not accept "Hades (mythology)") and skips the rest, which you can fix one by one. Tested only against a simulated Wikipedia (found/not found, wrong page, bad image source, offline, service down, stopping early). **Not tested against the live site**, so if it can't reach Wikipedia from your phone, the generated covers and "Use my photo" still work.
+**Real cover art (v4.2):** for each game your phone asks Wikipedia for the article by its *exact title* (up to six likely spellings per game, e.g. "God of War (2018 video game)", "God of War (video game)", "God of War"), about 14 games per request. It only accepts an article that Wikipedia describes as a game (so "Hades" the Greek god or the "Control" disambiguation page are rejected), downloads the cover thumbnail, shrinks it and keeps it on the phone. Covers load by themselves for your library and for the rows you scroll past in *Add games*; **Backup → Cover art → Download covers for the whole game list** fetches the entire built-in list (about 100 requests, then it is all offline). You can switch the automatic loading off there (then no game titles are ever sent anywhere). Games with no clear article remember that and are not asked again for 3 weeks; for those use the game's **Find cover online** (pick from search results) or **Use my photo**. Fetched covers are a re-downloadable cache and are not in backup files; photos you pick yourself are.
+
+**Tested with a simulated Wikipedia only** (title variants, redirects, wrong pages rejected, 1,456 games in 100 requests, offline use, remembering misses, service down, turning it off). **Not tested against the live Wikipedia or on a real iPhone.** Expect some games (very new, obscure or oddly named ones) to keep generated covers.
 
 **Covers, honestly:** the app does not contain official box art (that is copyrighted, and my environment can't download it). Covers are generated on your phone from the title, and you can swap in your own photo or screenshot per game. Photos make backup files bigger (roughly 30–60 KB each).
 

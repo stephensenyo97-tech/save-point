@@ -314,3 +314,9 @@ a.card.game.withcover { display: flex; gap: 14px; align-items: stretch; }
 .cand { width: 100%; display: flex; align-items: center; gap: 14px; margin-top: 10px; padding: 8px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); color: var(--text); text-align: left; cursor: pointer; font-weight: 700; }
 .cand img { width: 54px; height: 72px; object-fit: cover; border-radius: 8px; background: var(--surface2); flex: none; }
 .cand:active { background: var(--surface2); }
+
+/* ── v4.2: cover settings ── */
+.check { display: flex; gap: 12px; align-items: flex-start; margin-top: 12px; cursor: pointer; }
+.check input { width: 24px; height: 24px; accent-color: var(--cyan); flex: none; margin-top: 2px; }
+.check span { font-weight: 700; }
+.check small { display: block; font-weight: 500; color: var(--muted); font-size: 13px; margin-top: 2px; }
