@@ -7,7 +7,7 @@
   const DB_NAME = 'save-point', STORE = 'kv', KEY = 'state', UNDO_KEY = 'undo';
   const LS_MIRROR = 'savepoint.mirror.v1', LS_UNDO = 'savepoint.undo.v1', LS_DRAFT = 'savepoint.draft.';
   const FORMAT = 2;
-  const APP_VERSION = 'v4.2';
+  const APP_VERSION = 'v4.3';
   const COVERS_KEY = 'covers';
   const LS_PREF = 'savepoint.pickplat', LS_AUTOCOVER = 'savepoint.autocover';
   const PLATFORMS = ['PS5', 'PS4', 'PC', 'Xbox', 'Switch', 'Mobile', 'Other'];
@@ -980,7 +980,9 @@
         <div class="kv"><span>Built-in game list</span><span>${CATALOG.length} games</span></div>
         <div class="stack" style="margin-top:12px">
           <button class="btn block" data-act="check-update">Check for update</button>
-          <p class="muted small">When you upload new files to GitHub, tap this (while online). Your journal is never touched by an update.</p>
+          <p class="muted small">When you upload new files to GitHub, wait 2–3 minutes, then tap this while online. Your journal is never touched by an update.</p>
+          <button class="btn block" data-act="force-refresh">Force refresh app files</button>
+          <p class="muted small">Only if the check keeps saying you’re up to date but you know there’s a newer version. Re-downloads the app’s files; your journal stays.</p>
         </div>
       </div>
       <div class="card">
@@ -1209,6 +1211,7 @@
     'pick-cover': () => { const f = $('#coverIn'); if (f) f.click(); },
     'clear-cover': (t) => clearCover(t.dataset.id),
     'check-update': () => checkUpdate(),
+    'force-refresh': () => forceRefreshFiles(),
     'reload': () => location.reload(),
     'pick-sugg': (t) => {
       const form = $('#gameForm'); if (!form) return; const F = form.elements;
@@ -1288,11 +1291,27 @@
     try {
       const reg = await navigator.serviceWorker.getRegistration();
       if (!reg) return toast('The app isn’t installed for offline use yet', true);
-      toast('Checking for updates…');
-      updateSeen = false;
+      toast('Checking for updates…'); updateSeen = false;
+      let server = '';
+      try { const r = await fetch('sw.js?check=' + Date.now(), { cache: 'no-store' }); const m = /VERSION\s*=\s*'([^']+)'/.exec(await r.text()); server = m ? m[1] : ''; }
+      catch (e) { return toast('Couldn’t reach the server – check your connection', true); }
+      if (server && server === APP_VERSION) { reg.update().catch(() => {}); return toast(`You have the latest version (${APP_VERSION}, ${CATALOG.length} games in the list). If you just uploaded files, GitHub can take a few minutes – try again shortly.`); }
+      toast(server ? `New version ${server} found – downloading…` : 'Looking for a new version…');
       await reg.update();
-      setTimeout(() => { if (!updateSeen) toast(`You have the latest version (${APP_VERSION}, ${CATALOG.length} games in the list)`); }, 4000);
+      for (let i = 0; i < 45 && !updateSeen; i++) await sleep(1000);
+      if (!updateSeen) toast(`Still on ${APP_VERSION}${server ? ` (server has ${server})` : ''}. Keep the app open and try again in a minute, or use “Force refresh app files”.`, true);
     } catch (e) { toast('Could not check for updates right now', true); }
+  }
+  /** Last resort when an update won't arrive: throw away the app's cached FILES (never the journal) and reload. */
+  async function forceRefreshFiles() {
+    if (navigator.onLine === false) return toast('Connect to the internet first', true);
+    if (!(await confirmBox({ title: 'Force refresh app files?', message: 'This re-downloads the app’s own files from the internet and reloads. Your games, notes and photos are not touched.', okLabel: 'Refresh' }))) return;
+    try {
+      const r = await fetch('index.html?fresh=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status);
+      const regs = await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map((x) => x.unregister()));
+      const keys = await caches.keys(); await Promise.all(keys.filter((k) => k.startsWith('save-point-')).map((k) => caches.delete(k)));
+      toast('Reloading with fresh files…'); setTimeout(() => location.reload(), 700);
+    } catch (e) { toast('Couldn’t refresh – nothing was changed. Check your connection.', true); }
   }
 
   // ───────────────────────── boot ─────────────────────────
