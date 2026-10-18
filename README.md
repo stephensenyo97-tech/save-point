@@ -1,3 +1,23 @@
+## v4.7 – Hours played (phase 3 of 3)
+- Everything is shown in **hours** (e.g. "12.5 h"). Under the game's completion slider: **Start session** (timer), **End session & add hours**, **Add hours** (type 1.5 for an hour and a half), **Edit total hours**.
+- Starting a session sets the game to Playing (unless finished). Only one session can run at a time. A session counts from the clock, so it keeps running if you close the app; one session is capped at 12 h when ended (use Edit total if you really played longer). Under 1 minute adds nothing.
+- Stats → **Hours played**: total, last 7 days, per-week bars for the last 8 weeks, and most played. The weekly bars use the dated log of sessions/added hours; "Edit total" changes the total only. The log keeps the last 300 entries per game.
+- Library shows hours on each game and has a **Most hours played** sort; Home shows total hours.
+- Hours are part of backup files (same format 2; older backups import with 0 h, and an older app version importing a newer backup would drop the hours).
+- Not tested on a real iPhone. The timer is clock-based, not a background process, so it can't beep or notify.
+
+## v4.6 – Safer backups (phase 2 of 3)
+- **Backup reminder**: a banner appears when you have unsaved changes and your last backup is older than the interval you pick (Backup tab → Remind me to back up: 1 week / 2 weeks / 1 month / never). No changes since the last backup = no nagging. The older "No backup yet" and "10+ changes" notices still work.
+- **Last backup** now also shows "(3 days ago)".
+- **Check a backup file**: pick a saved backup and see how many games, notes and photos it holds and when it was made, without importing anything. Use it after "Save to Files" to be sure the file is good.
+- Limits: the app can't see where the share sheet put the file or whether you really chose "Save to Files"; it marks the backup as done when the share sheet closes without being cancelled. Reminders show only when you open the app (a web app on iPhone can't notify you in the background). Not tested on a real iPhone.
+
+## v4.5 – Fix missing covers (phase 1 of 3)
+- **Backup → Cover art → Fix missing covers (N)**: a second, wider automatic try for games that still have no real cover. It tries safe alternative spellings (without "Remastered/Complete Edition", Wikipedia-style capitals, "7" ↔ "VII", with/without "The", with/without "Marvel's"). Series pages are never accepted.
+- Whatever is still missing can be reviewed one by one. This is the only place subtitle-less guesses (e.g. "Foo: Bar" → "Foo") are offered, and only for you to confirm.
+- A match you confirm is now remembered for that title, so re-adding the game on another platform reuses it.
+- Not tested against the live Wikipedia or a real iPhone; the hit rate on your list is unknown until you run it.
+
 # Save Point – your gaming journal
 
 A private gaming journal that installs on your iPhone Home Screen. No account, no subscription, no server of yours.

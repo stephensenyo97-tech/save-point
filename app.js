@@ -7,9 +7,9 @@
   const DB_NAME = 'save-point', STORE = 'kv', KEY = 'state', UNDO_KEY = 'undo';
   const LS_MIRROR = 'savepoint.mirror.v1', LS_UNDO = 'savepoint.undo.v1', LS_DRAFT = 'savepoint.draft.';
   const FORMAT = 2;
-  const APP_VERSION = 'v4.4';
+  const APP_VERSION = 'v4.7';
   const COVERS_KEY = 'covers';
-  const LS_PREF = 'savepoint.pickplat', LS_AUTOCOVER = 'savepoint.autocover', LS_CONFIRM = 'savepoint.confirmcovers';
+  const LS_PREF = 'savepoint.pickplat', LS_AUTOCOVER = 'savepoint.autocover', LS_CONFIRM = 'savepoint.confirmcovers', LS_REMIND = 'savepoint.remind';
   const PLATFORMS = ['PS5', 'PS4', 'PC', 'Xbox', 'Switch', 'Mobile', 'Other'];
   const STATUSES = [
     { id: 'want', label: 'Want to Play' }, { id: 'playing', label: 'Playing' },
@@ -29,6 +29,7 @@
   const dateStr = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const todayStr = () => dateStr(new Date());
   const fmtDate = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s || ''); return m ? `${+m[3]} ${MONTHS[+m[2] - 1]} ${m[1]}` : ''; };
+  const fmtTime = (ts) => { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   const fmtDateTime = (ts) => { if (!ts) return 'never'; const d = new Date(ts); return `${fmtDate(dateStr(d))}, ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   const statusLabel = (id) => (STATUSES.find((s) => s.id === id) || STATUSES[0]).label;
   const typeLabel = (id) => (NOTE_TYPES.find((t) => t.id === id) || NOTE_TYPES[5]).label;
@@ -75,6 +76,9 @@
       fav: g.fav === true, queue: Math.max(0, num(g.queue === true ? Date.now() : g.queue, 0)),
       startedAt: /^\d{4}-\d{2}-\d{2}$/.test(g.startedAt || '') ? g.startedAt : '',
       finishedAt: /^\d{4}-\d{2}-\d{2}$/.test(g.finishedAt || '') ? g.finishedAt : '',
+      played: Math.min(600000, Math.max(0, Math.round(num(g.played, 0)))),
+      plays: Array.isArray(g.plays) ? g.plays.map((p) => (p && /^\d{4}-\d{2}-\d{2}$/.test(p.d || '') && Math.round(num(p.m, 0)) > 0 ? { d: p.d, m: Math.min(1440, Math.round(num(p.m, 0))) } : null)).filter(Boolean).slice(-300) : [],
+      sessionAt: num(g.sessionAt, 0) > 0 && num(g.sessionAt, 0) <= Date.now() + 60000 ? Math.round(num(g.sessionAt, 0)) : 0,
       createdAt: num(g.createdAt, Date.now()), updatedAt: num(g.updatedAt, Date.now())
     };
   }
@@ -107,7 +111,7 @@
   let db = null;
   const storage = { mode: 'none', idbOk: false, lsOk: false, lastSavedAt: null, persisted: null, lastError: '' };
   let state = freshState();
-  const cat = new Map(), catMiss = new Map(); // cover cache for the built-in list: normalised title -> small JPEG data URL / time of last miss
+  const catDeep = new Set(), cat = new Map(), catMiss = new Map(); // cover cache for the built-in list: normalised title -> small JPEG data URL / time of last miss
   let covers = Object.create(null); // gameId -> small JPEG data URL (your own photos), kept in IndexedDB
 
   function openDB() {
@@ -218,8 +222,20 @@
     g.updatedAt = Date.now();
   }
   function newGame(base) {
-    const g = Object.assign({ id: uid(), title: '', platform: 'Other', status: 'want', progress: 0, rating: 0, fav: false, queue: 0, startedAt: '', finishedAt: '', createdAt: Date.now(), updatedAt: Date.now() }, base, { status: 'want' });
+    const g = Object.assign({ id: uid(), title: '', platform: 'Other', status: 'want', progress: 0, rating: 0, fav: false, queue: 0, startedAt: '', finishedAt: '', played: 0, plays: [], sessionAt: 0, createdAt: Date.now(), updatedAt: Date.now() }, base, { status: 'want' });
     applyStatus(g, base.status || 'want'); g.updatedAt = g.createdAt; return g;
+  }
+  // ── hours played: stored as whole minutes, always shown in hours ──
+  const MAX_SESSION_MIN = 720;
+  const fmtHours = (min) => { min = Math.max(0, Math.round(min || 0)); if (!min) return '0 h'; const h = min / 60; return h < 0.1 ? '<0.1 h' : (h >= 100 ? String(Math.round(h)) : String(Math.round(h * 10) / 10)) + ' h'; };
+  function addPlay(g, minutes) { minutes = Math.round(minutes); if (!(minutes > 0)) return; g.played = Math.min(600000, (g.played || 0) + minutes); g.plays = (g.plays || []).concat({ d: todayStr(), m: Math.min(1440, minutes) }).slice(-300); g.updatedAt = Date.now(); }
+  const sessionMin = (g) => (g.sessionAt ? Math.max(0, Math.floor((Date.now() - g.sessionAt) / 60000)) : 0);
+  const totalPlayed = () => state.games.reduce((a, g) => a + (g.played || 0), 0);
+  /** Minutes played in the last 7 days (today included) and per week for the last 8 weeks, from the dated log. */
+  function weekly() {
+    const t = todayStr(), w = new Array(8).fill(0);
+    state.games.forEach((g) => (g.plays || []).forEach((p) => { const d = daysBetween(p.d, t); if (d >= 0 && d < 56) w[Math.floor(d / 7)] += p.m; }));
+    return w;
   }
   const daysBetween = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
   const notesOf = (id) => state.notes.filter((n) => n.gameId === id);
@@ -231,6 +247,13 @@
   }
   const backupFilename = () => `save-point-backup-${todayStr()}.json`;
   async function markBackedUp() { state.meta.lastBackupAt = Date.now(); state.meta.changes = 0; render(); try { await save(); } catch (e) { /* ignore */ } renderBanners(); }
+
+  /** How many days between backup reminders: 7, 14 or 30 (0 = never remind). */
+  const remindDays = () => { const v = lsGet(LS_REMIND); return v === null ? 14 : [0, 7, 14, 30].includes(+v) ? +v : 14; };
+  const daysSince = (ts) => Math.max(0, Math.floor((Date.now() - ts) / 86400000));
+  const agoText = (ts) => { const d = daysSince(ts); return d === 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`; };
+  /** Reminder is due when there are unsaved changes and the last backup is older than the chosen interval. */
+  const backupStale = () => { const m = state.meta, r = remindDays(); return !!(r && m.lastBackupAt && m.changes > 0 && daysSince(m.lastBackupAt) >= r); };
 
   async function exportBackup() {
     const text = JSON.stringify(buildBackup(), null, 2);
@@ -278,6 +301,18 @@
         <button class="btn" data-act="close-sheet">Cancel</button>
       </div>`);
     pendingImport = parsed;
+  }
+  /** Look inside a backup file without importing it, so you can be sure the file you saved is good. */
+  function showCheck(parsed, name) {
+    const ts = Date.parse(parsed.exportedAt || ''), np = Object.keys(parsed.covers).length;
+    openSheet(`<h2>This backup is good</h2><p class="muted small" style="margin-top:4px">${esc(String(name || '').slice(0, 80))}</p>
+      <div class="kv" style="margin-top:10px"><span>Made</span><span>${ts ? esc(fmtDateTime(ts)) : 'unknown date'}</span></div>
+      <div class="kv"><span>Games</span><span>${parsed.games.length}</span></div>
+      <div class="kv"><span>Notes</span><span>${parsed.notes.length}</span></div>
+      <div class="kv"><span>Photos</span><span>${np}</span></div>
+      ${parsed.skipped ? `<p class="warn small" style="margin-top:8px">${plural(parsed.skipped, 'entry')} in the file could not be read and would be skipped.</p>` : ''}
+      <p class="muted small" style="margin-top:10px">Nothing was imported or changed. Right now you have ${plural(state.games.length, 'game')} and ${plural(state.notes.length, 'note')}.</p>
+      <div class="actions"><button class="btn primary" data-act="close-sheet">Close</button></div>`);
   }
   let pendingImport = null;
   async function applyImport(mode) {
@@ -413,7 +448,7 @@
   const WIKI = 'https://en.wikipedia.org/w/api.php?format=json&origin=*&action=query&redirects=1&prop=pageimages%7Cdescription&piprop=thumbnail&pilicense=any&';
   const wikiBase = (t) => normKey(String(t).replace(/\s*\([^)]*\)\s*$/, ''));
   const isGamePage = (t) => { const m = /\(([^)]*)\)\s*$/.exec(String(t)); return !m || /video game/i.test(m[1]); };
-  const isGameDesc = (d) => /video game|computer game|mobile game/i.test(d) || (/\bgame\b/i.test(d) && !/board game|card game|tabletop|party game|game show/i.test(d));
+  const isGameDesc = (d) => !/\bseries\b|franchise|\b(company|developer|publisher|studio|soundtrack|album|film|television)\b/i.test(d) && (/video game|computer game|mobile game/i.test(d) || (/\bgame\b/i.test(d) && !/board game|card game|tabletop|party game|game show/i.test(d)));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const autoCovers = () => lsGet(LS_AUTOCOVER) !== '0';
   async function timedFetch(url, ms) {
@@ -433,16 +468,34 @@
   const okThumb = (src) => typeof src === 'string' && /^https:\/\/upload\.wikimedia\.org\//.test(src);
 
   /** Likely Wikipedia article titles for a game, best first. */
-  function titleVariants(title, date) {
+  const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
+  const SMALL = /^(a|an|the|of|and|in|on|at|to|for|from|with|vs|or|de)$/i;
+  /** Extra spellings for the "fix missing covers" pass: no subtitle, no edition words, Wikipedia-style capitals, number ↔ roman numeral. */
+  function deepBases(t, risky) {
+    const out = [];
+    const add = (x) => { x = String(x || '').replace(/\s+/g, ' ').replace(/[\s:–-]+$/, '').trim(); if (x.length > 1 && x !== t && !out.includes(x)) out.push(x); };
+    const noEdition = t.replace(/\b(the )?(remastered|remaster|definitive edition|complete edition|game of the year edition|goty edition|deluxe edition|director's cut|special edition|enhanced edition|anniversary edition|ultimate edition|legendary edition|gold edition|standard edition)\b/ig, '').replace(/\(\s*\)/g, '');
+    add(noEdition);
+    if (risky) { add(t.split(/\s*[:–—]\s*|\s+-\s+/)[0]); add(noEdition.split(/\s*[:–—]\s*|\s+-\s+/)[0]); } // may land on the series/first game, so only ever shown for you to confirm
+    add(t.replace(/^the\s+/i, '')); if (!/^the\s/i.test(t)) add('The ' + t);
+    add(t.split(' ').map((w, i) => (i && SMALL.test(w) ? w.toLowerCase() : w)).join(' '));
+    const m = /^(.*\S)\s+(\d{1,2})$/.exec(t); if (m && +m[2] > 1 && +m[2] <= 10) add(m[1] + ' ' + ROMAN[+m[2]]);
+    const r = /^(.*\S)\s+(II|III|IV|V|VI|VII|VIII|IX|X)$/.exec(t); if (r) add(r[1] + ' ' + ROMAN.indexOf(r[2]));
+    if (/^marvel's /i.test(t)) add(t.replace(/^marvel's /i, '')); else if (/^(spider-man|wolverine|guardians of the galaxy|iron man|avengers)\b/i.test(t)) add("Marvel's " + t);
+    return out;
+  }
+  function titleVariants(title, date, deep) { // deep: 1 = safe extra spellings (automatic), 2 = also subtitle-less (only for confirm screen)
     const t = String(title).replace(/[‘’]/g, "'").replace(/\s+/g, ' ').trim(), y = (/^(\d{4})/.exec(date || '') || [])[1] || '', out = [];
     const add = (x) => { if (x && x.length < 200 && !/[|<>#[\]{}]/.test(x) && !out.includes(x)) out.push(x); };
     const alt = /&/.test(t) ? t.replace(/\s*&\s*/g, ' and ') : /\band\b/.test(t) ? t.replace(/\band\b/g, '&') : '';
     [t, alt].forEach((b) => { if (!b) return; if (y) add(`${b} (${y} video game)`); add(`${b} (video game)`); add(b); });
-    return out.slice(0, 6);
+    if (!deep) return out.slice(0, 6);
+    deepBases(t, deep === 2).forEach((b) => { add(`${b} (video game)`); add(b); });
+    return out.slice(0, 14);
   }
   /** One request for many games. Returns, for each entry, {src,title} or null. */
   async function wikiLookup(batch, wantAll) {
-    const vars = batch.map((e) => titleVariants(e.title, e.date)), all = [...new Set(vars.flat())];
+    const vars = batch.map((e) => titleVariants(e.title, e.date, e.deep)), all = [...new Set(vars.flat())];
     const url = WIKI + 'pithumbsize=330&titles=' + all.map(encodeURIComponent).join('%7C');
     const q = ((await (await timedFetch(url, 20000)).json()) || {}).query || {};
     const step = new Map(); (q.normalized || []).forEach((n) => step.set(n.from, n.to)); (q.redirects || []).forEach((r) => step.set(r.from, r.to));
@@ -468,7 +521,7 @@
     try {
       const range = IDBKeyRange.bound(CC, CC + '￿'), st = db.transaction(STORE, 'readonly').objectStore(STORE);
       const [keys, vals] = await Promise.all([idbReq(st.getAllKeys(range)), idbReq(st.getAll(range))]);
-      keys.forEach((k, i) => { const key = String(k).slice(CC.length), v = vals[i]; if (v && typeof v.u === 'string' && COVER_RE.test(v.u)) cat.set(key, v.u); else if (v && v.m && v.v >= 2) catMiss.set(key, +v.t || 0); });
+      keys.forEach((k, i) => { const key = String(k).slice(CC.length), v = vals[i]; if (v && typeof v.u === 'string' && COVER_RE.test(v.u)) cat.set(key, v.u); else if (v && v.m && v.v >= 2) { catMiss.set(key, +v.t || 0); if (v.d) catDeep.add(key); } });
     } catch (e) { console.warn('cover cache not loaded', e); }
     refreshCoverEls(); if (route().name === 'backup') render();
   }
@@ -477,7 +530,7 @@
     return new Promise((res, rej) => { const tx = db.transaction(STORE, 'readwrite'), st = tx.objectStore(STORE); items.forEach(([k, v]) => st.put(v, CC + k)); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error || new Error('aborted')); });
   }
   async function clearCoverCache() {
-    cat.clear(); catMiss.clear();
+    cat.clear(); catMiss.clear(); catDeep.clear();
     if (db) await new Promise((res) => { const tx = db.transaction(STORE, 'readwrite'); tx.objectStore(STORE).delete(IDBKeyRange.bound(CC, CC + '￿')); tx.oncomplete = () => res(); tx.onerror = () => res(); });
     render(); toast('Cover cache cleared');
   }
@@ -490,7 +543,7 @@
   function enqueueCovers(entries, force) {
     if (!db || navigator.onLine === false || (!force && !autoCovers())) return 0;
     let n = 0;
-    for (const e of entries) { if (!needsCover(e.key)) continue; covq.queue.push(e); covq.queued.add(e.key); n++; }
+    for (const e of entries) { if (e.deep ? (cat.has(e.key) || covq.queued.has(e.key)) : !needsCover(e.key)) continue; covq.queue.push(e); covq.queued.add(e.key); n++; }
     if (n) { if (!covq.running) { covq.found = covq.missed = covq.failed = 0; covq.paused = ''; covq.total = 0; } covq.total += n; runCovq(); }
     return n;
   }
@@ -501,7 +554,7 @@
       while (covq.queue.length && !covq.cancel) {
         if (navigator.onLine === false) { covq.paused = 'offline'; break; }
         const batch = []; let titles = 0;
-        while (covq.queue.length && batch.length < 14) { const nt = titleVariants(covq.queue[0].title, covq.queue[0].date).length; if (batch.length && titles + nt > 48) break; batch.push(covq.queue.shift()); titles += nt; }
+        while (covq.queue.length && batch.length < 14) { const nt = titleVariants(covq.queue[0].title, covq.queue[0].date, covq.queue[0].deep).length; if (batch.length && titles + nt > 48) break; batch.push(covq.queue.shift()); titles += nt; }
         let results;
         try { results = await wikiLookup(batch); apiFails = 0; }
         catch (e) {
@@ -515,7 +568,7 @@
             const hit = results[i + j];
             try {
               if (hit) { const url = await fileToCover(await fetchThumb(hit.src), 240, 320, 0.72); cat.set(e.key, url); catMiss.delete(e.key); puts.push([e.key, { u: url, t: Date.now() }]); covq.found++; }
-              else { catMiss.set(e.key, Date.now()); puts.push([e.key, { m: 1, v: 2, t: Date.now() }]); covq.missed++; }
+              else { catMiss.set(e.key, Date.now()); if (e.deep) catDeep.add(e.key); puts.push([e.key, e.deep ? { m: 1, v: 2, d: 1, t: Date.now() } : { m: 1, v: 2, t: Date.now() }]); covq.missed++; }
             } catch (err) { covq.failed++; covq.lastError = String((err && err.message) || err).slice(0, 80); }
             covq.queued.delete(e.key);
           }));
@@ -529,6 +582,27 @@
       if (covq.onProgress) covq.onProgress(true);
       if (route().name === 'backup') render();
     }
+  }
+  // "Fix missing covers": games that still have no real cover get a second, wider automatic try (safe spellings only),
+  // then whatever is still missing is offered one by one for you to confirm.
+  const missingCover = () => state.games.filter((g) => !covers[g.id] && !cat.has(normKey(g.title)));
+  function startFixJob() {
+    if (!db) return toast('Cover art needs device storage, which this browser has blocked', true);
+    if (navigator.onLine === false) return toast('Connect to the internet first', true);
+    const miss = missingCover(); if (!miss.length) return toast('Every game in your library already has a cover');
+    const todo = miss.filter((g) => !catDeep.has(normKey(g.title)));
+    if (!todo.length || covq.running) return startReview(miss.map(rvItem));
+    const entries = todo.map((g) => { const c = CATALOG_BY_KEY.get(normKey(g.title)); return { ...entryOf(g.title, c && c.date), deep: 1 }; });
+    openSheet('<h2>Fixing missing covers</h2><div id="cprog"></div><div class="actions" id="cacts"><button class="btn" data-act="stop-cover-job">Stop</button></div>');
+    const paint = (done) => {
+      const el = $('#cprog'); if (!el) { covq.cancel = true; return; }
+      const checked = covq.found + covq.missed + covq.failed, pct = covq.total ? Math.min(100, Math.round((checked / covq.total) * 100)) : 100;
+      el.innerHTML = `<div class="bar"><i style="width:${pct}%"></i></div><p style="margin:12px 0 4px"><b>${covq.found}</b> fixed · ${checked} of ${covq.total} checked</p>`
+        + (done ? `<p class="muted small">${covq.paused === 'unreachable' ? 'Couldn’t reach Wikipedia, so this stopped. Try again later. ' : covq.cancel ? 'Stopped. ' : ''}${covq.failed ? `${plural(covq.failed, 'download')} failed${covq.lastError ? ` (last problem: ${esc(covq.lastError)})` : ''}. ` : ''}${plural(missingCover().length, 'game')} still ${missingCover().length === 1 ? 'has' : 'have'} no cover.</p>` : '<p class="muted small">Trying other spellings of each title. Keep this open.</p>');
+      if (done) { const n = missingCover().length; $('#cacts').innerHTML = (n && covq.paused !== 'unreachable' ? '<button class="btn primary" data-act="fix-review">Review the rest one by one</button>' : '') + '<button class="btn" data-act="close-sheet">Done</button>'; }
+    };
+    covq.onProgress = paint; covq.found = covq.missed = covq.failed = 0; covq.total = 0; covq.paused = '';
+    enqueueCovers(entries, true); paint(!covq.running);
   }
   /** Foreground job with a progress sheet: scope 'library' (your games) or 'all' (the whole built-in list). */
   function startCoverJob(scope) {
@@ -568,8 +642,10 @@
   async function wikiCandidates(item) {
     const out = [], seen = new Set(), push = (c) => { const k = c && String(c.title).toLowerCase(); if (c && !seen.has(k) && !seen.has(c.src)) { seen.add(k); seen.add(c.src); out.push(c); } };
     let failed = false;
-    try { (await wikiLookup([{ title: item.title, date: item.date }], true))[0].forEach(push); } catch (e) { failed = true; }
+    try { (await wikiLookup([{ title: item.title, date: item.date, deep: 2 }], true))[0].forEach(push); } catch (e) { failed = true; }
     if (out.length < 3) { try { (await wikiSearch(item.title)).forEach(push); failed = false; } catch (e) { if (!out.length) failed = true; } }
+    const head = item.title.split(/\s*[:–—]\s*|\s+-\s+/)[0];
+    if (out.length < 3 && head !== item.title && head.length > 3) { try { (await wikiSearch(head)).forEach(push); failed = false; } catch (e) { /* keep what we have */ } }
     if (!out.length && failed) throw new Error('unreachable');
     return out.slice(0, 6);
   }
@@ -618,7 +694,8 @@
     try {
       const url = await fetchCoverFor(c), prev = covers[it.id]; covers[it.id] = url;
       if (!(await saveCovers())) { if (prev) covers[it.id] = prev; else delete covers[it.id]; return showReview(); }
-      rv.saved++; await mutate((s) => { const g = gameById2(s, it.id); if (g) g.updatedAt = Date.now(); }, null);
+      rv.saved++; const ck = normKey(it.title); cat.set(ck, url); catMiss.delete(ck); try { await ccPutMany([[ck, { u: url, t: Date.now() }]]); } catch (e) { /* still saved on the game */ }
+      await mutate((s) => { const g = gameById2(s, it.id); if (g) g.updatedAt = Date.now(); }, null);
       rv.i++; showReview();
     } catch (e) { toast('Couldn’t download that one. Try another.', true); st.list.splice(st.ci, 1); if (st.ci >= st.list.length) st.ci = 0; showReview(); }
   }
@@ -726,7 +803,7 @@
     const n = notesOf(g.id).length;
     return `<a class="card game withcover" href="#/game/${encodeURIComponent(g.id)}"><div class="gc-cover" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'thumb')}</div><div class="gc-body">
       <div class="g-top"><h3>${g.fav ? '<span class="heart" aria-label="Favorite">♥</span> ' : ''}${esc(g.title)}</h3><span class="pill st-${g.status}">${esc(statusLabel(g.status))}</span></div>
-      <div class="g-meta"><span class="plat">${esc(g.platform)}</span><span>${plural(n, 'note')}</span>${g.rating ? `<span class="rate-badge">★ ${g.rating}/10</span>` : ''}${g.queue ? '<span class="queue-badge">Up next</span>' : ''}</div>
+      <div class="g-meta"><span class="plat">${esc(g.platform)}</span><span>${plural(n, 'note')}</span>${g.played ? `<span>${fmtHours(g.played)}</span>` : ''}${g.sessionAt ? '<span class="live-badge">● Playing</span>' : ''}${g.rating ? `<span class="rate-badge">★ ${g.rating}/10</span>` : ''}${g.queue ? '<span class="queue-badge">Up next</span>' : ''}</div>
       <div class="bar"><i style="width:${g.progress}%"></i></div><div class="pct">${g.progress}%</div></div></a>`;
   }
   function queueCard(g) {
@@ -762,7 +839,7 @@
         <div class="stat accent"><b>${c('playing')}</b><span>Playing now</span></div>
         <div class="stat good"><b>${c('finished')}</b><span>Completed</span></div>
       </div>
-      <div class="substats">${c('want')} want to play · ${c('paused')} paused · ${plural(state.notes.length, 'note')}${state.games.some((g) => g.fav) ? ` · <span class="heart">♥</span> ${state.games.filter((g) => g.fav).length}` : ''}</div>
+      <div class="substats">${c('want')} want to play · ${c('paused')} paused · ${plural(state.notes.length, 'note')}${state.games.some((g) => g.fav) ? ` · <span class="heart">♥</span> ${state.games.filter((g) => g.fav).length}` : ''}${totalPlayed() ? ` · ${fmtHours(totalPlayed())} played` : ''}</div>
       ${queued.length ? `<div class="section-title">Up next <a href="#/library" data-act="open-queue">See all</a></div>${queued.map(queueCard).join('')}` : ''}
       <div class="section-title">Continue playing <a href="#/library">All games</a></div>
       ${playing.length ? playing.map(gameCard).join('') : '<p class="muted card">Nothing marked “Playing” right now.</p>'}
@@ -779,7 +856,7 @@
     else if (ui.libStatus === 'queue') list = list.filter((g) => g.queue);
     else if (ui.libStatus !== 'all') list = list.filter((g) => g.status === ui.libStatus);
     if (ui.libPlat !== 'all') list = list.filter((g) => g.platform === ui.libPlat);
-    const sorters = { recent: (a, b) => b.updatedAt - a.updatedAt, title: (a, b) => a.title.localeCompare(b.title), progress: (a, b) => b.progress - a.progress, rating: (a, b) => b.rating - a.rating || a.title.localeCompare(b.title) };
+    const sorters = { recent: (a, b) => b.updatedAt - a.updatedAt, title: (a, b) => a.title.localeCompare(b.title), progress: (a, b) => b.progress - a.progress, rating: (a, b) => b.rating - a.rating || a.title.localeCompare(b.title), played: (a, b) => (b.played || 0) - (a.played || 0) || a.title.localeCompare(b.title) };
     list.sort(sorters[ui.libSort] || sorters.recent);
     if (ui.libStatus === 'queue') list.sort((a, b) => a.queue - b.queue);
     if (!list.length) return emptyState('library', state.games.length ? 'No matches' : 'No games yet', state.games.length ? 'Try a different search or filter.' : 'Tap “Game” to add one.');
@@ -794,7 +871,7 @@
       <div class="chips" style="margin-top:10px">${chips}</div>
       <div class="filters">
         <select data-bind="libPlat" aria-label="Platform"><option value="all">All platforms</option>${plats.map((p) => `<option ${ui.libPlat === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select>
-        <select data-bind="libSort" aria-label="Sort"><option value="recent" ${ui.libSort === 'recent' ? 'selected' : ''}>Recently active</option><option value="title" ${ui.libSort === 'title' ? 'selected' : ''}>Title A–Z</option><option value="progress" ${ui.libSort === 'progress' ? 'selected' : ''}>Most complete</option><option value="rating" ${ui.libSort === 'rating' ? 'selected' : ''}>Highest rated</option></select>
+        <select data-bind="libSort" aria-label="Sort"><option value="recent" ${ui.libSort === 'recent' ? 'selected' : ''}>Recently active</option><option value="title" ${ui.libSort === 'title' ? 'selected' : ''}>Title A–Z</option><option value="progress" ${ui.libSort === 'progress' ? 'selected' : ''}>Most complete</option><option value="rating" ${ui.libSort === 'rating' ? 'selected' : ''}>Highest rated</option><option value="played" ${ui.libSort === 'played' ? 'selected' : ''}>Most hours played</option></select>
       </div>
       ${state.games.some((g) => !covers[g.id]) ? `<button class="btn sm block" data-act="fetch-all-covers" style="margin-top:12px">Find covers for my games</button>` : ''}
       <div id="listBox">${libraryList()}</div>`
@@ -847,6 +924,11 @@
         <div class="rate" role="group" aria-label="Rating out of 10">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => `<button class="${g.rating === v ? 'on' : ''}" data-act="set-rating" data-id="${esc(g.id)}" data-v="${v}" aria-pressed="${g.rating === v}">${v}</button>`).join('')}</div>
         <label class="f" for="prog">COMPLETION</label>
         <div class="range-row"><input id="prog" type="range" min="0" max="100" step="1" value="${g.progress}" data-progress="${esc(g.id)}"><output id="progOut">${g.progress}%</output></div>
+        <label class="f">HOURS PLAYED <b class="rate-val">${esc(fmtHours(g.played))}</b></label>
+        ${g.sessionAt ? `<div class="sess"><b>Session running</b><span data-sess="${esc(g.id)}">${esc(fmtHours(sessionMin(g)))}</span><small class="muted">since ${esc(fmtTime(g.sessionAt))}</small></div>
+        <div class="row"><button class="btn primary" data-act="end-session" data-id="${esc(g.id)}">End session &amp; add hours</button><button class="btn" data-act="cancel-session" data-id="${esc(g.id)}">Discard</button></div>`
+        : `<div class="row"><button class="btn primary" data-act="start-session" data-id="${esc(g.id)}">▶ Start session</button><button class="btn" data-act="add-hours" data-id="${esc(g.id)}">Add hours</button></div>`}
+        ${g.played || (g.plays || []).length ? `<button class="btn sm" data-act="edit-hours" data-id="${esc(g.id)}" style="margin-top:8px">Edit total hours</button>` : ''}
         <div class="dates">
           <label class="f" for="dStart">STARTED</label><label class="f" for="dEnd">FINISHED</label>
           <div class="dwrap"><input id="dStart" type="date" data-date="startedAt" data-id="${esc(g.id)}" value="${esc(g.startedAt)}">${g.startedAt ? `<button class="x" data-act="clear-date" data-k="startedAt" data-id="${esc(g.id)}" aria-label="Clear start date">✕</button>` : ''}</div>
@@ -863,6 +945,20 @@
 
 
   // ───────────────────────── stats ─────────────────────────
+  function hoursCard() {
+    const tot = totalPlayed(), w = weekly(), wMax = Math.max(...w);
+    const top = state.games.filter((g) => g.played).sort((a, b) => b.played - a.played || a.title.localeCompare(b.title)).slice(0, 5), tMax = top.length ? top[0].played : 0;
+    const hb = (label, min, max) => `<div class="hb wide"><span class="hb-l">${esc(label)}</span><div class="hb-t"><i style="width:${max ? Math.max(min ? 4 : 0, Math.round((min / max) * 100)) : 0}%"></i></div><span class="hb-n">${esc(fmtHours(min))}</span></div>`;
+    if (!tot) return `<div class="card"><h3 class="ct">Hours played</h3><p class="sub">Open a game and tap “Start session”, or “Add hours”, to see your playtime here.</p></div>`;
+    return `<div class="card"><h3 class="ct">Hours played</h3>
+      <div class="kv"><span>Total</span><span><b>${esc(fmtHours(tot))}</b></span></div>
+      <div class="kv"><span>Last 7 days</span><span>${esc(fmtHours(w[0]))}</span></div>
+      <h4 class="sub" style="margin:12px 0 2px">Per week</h4>
+      ${w.slice(0, 8).map((m, i) => hb(i === 0 ? 'This week' : i === 1 ? 'Last week' : i + ' wks ago', m, wMax)).join('')}
+      <h4 class="sub" style="margin:12px 0 2px">Most played</h4>
+      ${top.map((g) => hb(g.title.length > 14 ? g.title.slice(0, 13) + '…' : g.title, g.played, tMax)).join('')}
+      <p class="muted small" style="margin-top:8px">Weeks cover the last 7 days, the 7 before that, and so on. Hours you set with “Edit total” count toward the total but not the weekly chart.</p></div>`;
+  }
   function viewStats() {
     const gs = state.games;
     if (!gs.length) return { title: 'Stats', fab: null, html: emptyState('stats', 'No stats yet', 'Add some games, rate them and mark the ones you finish. Your numbers show up here.') };
@@ -889,6 +985,7 @@
         <div class="stat accent"><b>${rated.length ? avg.toFixed(1) : '–'}</b><span>Avg rating</span></div>
       </div>
       <div class="substats">${rated.length ? plural(rated.length, 'rated game') : 'No ratings yet'} · ${plural(state.notes.length, 'note')}${avgDays ? ` · finish in ~${plural(avgDays, 'day')}` : ''}</div>
+      ${hoursCard()}
       <div class="card"><h3 class="ct">By status</h3>${stCounts.map(([l, n, id]) => hbar(l, n, stMax, 'st-' + id)).join('')}</div>
       <div class="card"><h3 class="ct">Your ratings</h3>${rated.length ? `<div class="hist">${dist.map((n, i) => `<div class="hcol"><small>${n || ''}</small><div class="hc-t"><i style="height:${Math.round((n / dMax) * 100)}%"></i></div><b>${i + 1}</b></div>`).join('')}</div>` : '<p class="sub">Rate a game 1–10 to see how you score things.</p>'}</div>
       <div class="card"><h3 class="ct">By platform</h3>${pl.map(([l, n]) => hbar(l, n, pMax)).join('')}</div>
@@ -990,11 +1087,13 @@
         <h3 class="ct">Back up your journal</h3>
         <p class="sub">Your data exists only on this phone. A backup file is your protection against clearing Safari data, deleting the app, or changing phones.</p>
         <div class="kv"><span>Contents</span><span>${plural(state.games.length, 'game')}, ${plural(state.notes.length, 'note')}${Object.keys(covers).length ? `, ${plural(Object.keys(covers).length, 'photo')}` : ''}</span></div>
-        <div class="kv"><span>Last backup</span>${backupLine}</div>
+        <div class="kv"><span>Last backup</span><span>${backupLine}${m.lastBackupAt ? ` <span class="muted">(${esc(agoText(m.lastBackupAt))})</span>` : ''}</span></div>
         <div class="kv"><span>Changes since then</span><span class="${m.changes ? 'warn' : ''}">${m.changes}</span></div>
         <div class="stack" style="margin-top:14px">
           <button class="btn primary block" data-act="export" ${total ? '' : 'disabled'}>${icon('share')}Save backup file</button>
-          <p class="muted small">On iPhone this opens the share sheet. Choose <b>Save to Files</b> (iCloud Drive keeps it off the phone too).</p>
+          <p class="muted small">On iPhone this opens the share sheet. Choose <b>Save to Files</b> (iCloud Drive keeps it off the phone too). The app can’t see where you saved it, so it marks the backup as done once the share sheet closes without cancelling.</p>
+          <label style="display:block;margin-top:10px"><span class="muted small" style="display:block;margin-bottom:4px">Remind me to back up</span>
+            <select data-remind="1">${[[7, 'After 1 week with changes'], [14, 'After 2 weeks with changes'], [30, 'After 1 month with changes'], [0, 'Never (only the “no backup yet” notice)']].map(([v, l]) => `<option value="${v}" ${remindDays() === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         </div>
       </div>
       <div class="card">
@@ -1002,6 +1101,8 @@
         <p class="sub">Pick a Save Point backup file. You can merge it with what’s here or replace everything, and undo either.</p>
         <div class="stack">
           <button class="btn block" data-act="pick-file">${icon('upload')}Import backup file</button>
+          <button class="btn block" data-act="check-backup">Check a backup file</button>
+          <input id="chkIn" type="file" accept=".json,application/json,text/plain" hidden>
           <input id="fileIn" type="file" accept=".json,application/json,text/plain" hidden>
           <div class="row"><button class="btn sm" data-act="copy-backup" ${total ? '' : 'disabled'}>Copy as text</button><button class="btn sm" data-act="paste-import">Import pasted text</button></div>
           <button class="btn block" data-act="undo" id="undoBtn" hidden>Undo last import / erase</button>
@@ -1021,6 +1122,7 @@
         <label class="check"><input type="checkbox" data-confirmcovers="1" ${confirmAfterAdd() ? 'checked' : ''}><span>Ask me to confirm covers after adding games<small>Shows the cover Wikipedia has, with a link; it is only saved if you tap Yes.</small></span></label>
         <label class="check"><input type="checkbox" data-autocover="1" ${autoCovers() ? 'checked' : ''}><span>Load cover art automatically<small>Sends game titles to Wikipedia to find covers. Off = generated covers only.</small></span></label>
         <div class="stack" style="margin-top:12px">
+          ${missingCover().length ? `<button class="btn primary block" data-act="fix-covers">Fix missing covers (${missingCover().length})</button>` : ''}
           <button class="btn block" data-act="review-covers" ${state.games.some((g) => !covers[g.id]) ? '' : 'disabled'}>Review covers for my games one by one</button>
           <button class="btn block" data-act="cover-job-all">Download covers for the whole game list</button>
           <button class="btn block" data-act="clear-cover-cache" ${cat.size || catMiss.size ? '' : 'disabled'}>Clear cover cache</button>
@@ -1083,6 +1185,7 @@
     const total = state.games.length + state.notes.length;
     if (storage.mode !== 'indexeddb') out.push(`<div class="banner err"><p><b>Storage warning:</b> this browser blocked IndexedDB, so Save Point is using a smaller fallback. Export backups often.</p></div>`);
     if (total && !state.meta.lastBackupAt) out.push(`<div class="banner"><p><b>No backup yet.</b> Your journal only exists on this phone.</p><button class="btn sm" data-act="export">Back up</button></div>`);
+    else if (total && backupStale()) out.push(`<div class="banner"><p><b>Last backup: ${esc(agoText(state.meta.lastBackupAt))}.</b> ${plural(state.meta.changes, 'change')} since then.</p><button class="btn sm" data-act="export">Back up</button></div>`);
     else if (total && state.meta.changes >= 10) out.push(`<div class="banner"><p><b>${plural(state.meta.changes, 'change')}</b> since your last backup.</p><button class="btn sm" data-act="export">Back up</button></div>`);
     if (ui.updated) out.unshift(`<div class="banner"><p><b>Save Point was updated.</b> Reload to use the new version.</p><button class="btn sm" data-act="reload">Reload</button></div>`);
     el.innerHTML = out.join('');
@@ -1251,12 +1354,27 @@
     'set-rating': (t) => { const id = t.dataset.id, v = +t.dataset.v; mutate((s) => { const g = gameById2(s, id); g.rating = g.rating === v ? 0 : v; g.updatedAt = Date.now(); }); },
     'toggle-fav': (t) => { const id = t.dataset.id; mutate((s) => { const g = gameById2(s, id); g.fav = !g.fav; g.updatedAt = Date.now(); }); },
     'toggle-queue': (t) => { const id = t.dataset.id; mutate((s) => { const g = gameById2(s, id); g.queue = g.queue ? 0 : Date.now(); g.updatedAt = Date.now(); }, null); },
+    'start-session': (t) => { const id = t.dataset.id; if (state.games.some((x) => x.sessionAt && x.id !== id)) return toast('Another game already has a session running. End it first.', true); mutate((s) => { const g = gameById2(s, id); if (g.status !== 'playing' && g.status !== 'finished') applyStatus(g, 'playing'); g.sessionAt = Date.now(); g.updatedAt = Date.now(); }, 'Session started – have fun!'); },
+    'end-session': (t) => { const id = t.dataset.id, g0 = gameById(id), raw = g0 ? sessionMin(g0) : 0, m = Math.min(MAX_SESSION_MIN, raw); mutate((s) => { const g = gameById2(s, id); g.sessionAt = 0; if (m >= 1) addPlay(g, m); g.updatedAt = Date.now(); }, m >= 1 ? `Added ${fmtHours(m)}${raw > MAX_SESSION_MIN ? ' (capped at 12 h – use Edit total if needed)' : ''}` : 'Session was under a minute, nothing added'); },
+    'cancel-session': (t) => { const id = t.dataset.id; mutate((s) => { const g = gameById2(s, id); g.sessionAt = 0; g.updatedAt = Date.now(); }, 'Session discarded'); },
+    'add-hours': (t) => { const id = t.dataset.id; openSheet(`<h2>Add hours played</h2><p class="muted small" style="margin:6px 0">How long did you play? Use hours, like 1.5 for an hour and a half.</p>
+      <input id="hrIn" type="number" inputmode="decimal" min="0" max="24" step="0.25" placeholder="Hours, e.g. 2" aria-label="Hours played">
+      <div class="chips" style="margin-top:10px">${[0.5, 1, 2, 3].map((v) => `<button class="chip" data-act="hr-fill" data-v="${v}">${v} h</button>`).join('')}</div>
+      <div class="actions"><button class="btn" data-act="close-sheet">Cancel</button><button class="btn primary" data-act="do-add-hours" data-id="${esc(id)}">Add</button></div>`); const i = $('#hrIn'); if (i) i.focus(); },
+    'hr-fill': (t) => { const i = $('#hrIn'); if (i) i.value = t.dataset.v; },
+    'do-add-hours': (t) => { const id = t.dataset.id, h = parseFloat(($('#hrIn') || {}).value), m = Math.round(h * 60); if (!(h > 0) || m < 1) return toast('Enter the hours you played, like 1.5', true); if (h > 24) return toast('Add up to 24 hours at a time', true); closeSheet(); mutate((s) => addPlay(gameById2(s, id), m), `Added ${fmtHours(m)}`); },
+    'edit-hours': (t) => { const g = gameById(t.dataset.id); if (!g) return; openSheet(`<h2>Edit total hours</h2><p class="muted small" style="margin:6px 0">Set the total for ${esc(g.title)} in hours. This fixes the total only; the weekly chart keeps what was logged.</p>
+      <input id="hrIn" type="number" inputmode="decimal" min="0" max="10000" step="0.1" value="${Math.round((g.played / 60) * 100) / 100}" aria-label="Total hours played">
+      <div class="actions"><button class="btn" data-act="close-sheet">Cancel</button><button class="btn primary" data-act="do-edit-hours" data-id="${esc(g.id)}">Save</button></div>`); },
+    'do-edit-hours': (t) => { const id = t.dataset.id, h = parseFloat(($('#hrIn') || {}).value); if (!(h >= 0) || h > 10000) return toast('Enter a number of hours, like 12.5', true); closeSheet(); mutate((s) => { const g = gameById2(s, id); g.played = Math.round(h * 60); g.updatedAt = Date.now(); }, 'Total hours updated'); },
     'start-game': (t) => { const id = t.dataset.id; mutate((s) => { applyStatus(gameById2(s, id), 'playing'); }, 'Started – have fun!'); },
     'open-queue': () => { ui.libStatus = 'queue'; },
     'clear-date': (t) => { const id = t.dataset.id, k = t.dataset.k; mutate((s) => { const g = gameById2(s, id); g[k] = ''; g.updatedAt = Date.now(); }); },
     'share-card': (t) => openShareCard(t.dataset.id),
     'do-share-card': () => doShareCard(),
     'find-cover': (t) => { const g = gameById(t.dataset.id); if (g) startReview([rvItem(g)]); },
+    'fix-covers': () => startFixJob(),
+    'fix-review': () => startReview(missingCover().map(rvItem)),
     'review-covers': () => startReview(state.games.filter((g) => !covers[g.id]).map(rvItem)),
     'rv-yes': () => rvYes(),
     'rv-next': async () => { const it = rv.items[rv.i], st = it && (await rvLoad(it)); if (st && st.ci + 1 < st.list.length) { st.ci++; showReview(); } },
@@ -1296,6 +1414,7 @@
     'set-ui': (t) => { ui[t.dataset.k] = t.dataset.v; render(); },
     'export': () => exportBackup(),
     'copy-backup': () => copyBackup(),
+    'check-backup': () => { const f = $('#chkIn'); if (f) f.click(); },
     'pick-file': () => { const f = $('#fileIn'); if (f) f.click(); },
     'paste-import': () => {
       const sh = openSheet(`<h2>Import pasted backup</h2><p class="muted small">Paste the full text you copied with “Copy as text”.</p>
@@ -1333,6 +1452,8 @@
     if (t.dataset && t.dataset.pickopt) { if (t.dataset.pickopt === 'plat') { multi.pref = t.value; lsSet(LS_PREF, t.value); } else multi.status = t.value; return; }
     if (t.dataset && t.dataset.bind && t.tagName === 'SELECT') { ui[t.dataset.bind] = t.value; const lb = $('#listBox'); if (lb) lb.innerHTML = libraryList(); return; }
     if (t.dataset && t.dataset.rvphoto && t.files && t.files[0]) { const f = t.files[0]; t.value = ''; rvPhoto(f); return; }
+    if (t.dataset && t.dataset.remind) { lsSet(LS_REMIND, t.value); renderBanners(); toast(+t.value ? 'Backup reminders: every ' + (+t.value === 7 ? 'week' : +t.value === 14 ? '2 weeks' : 'month') : 'Backup reminders off'); return; }
+    if (t.id === 'chkIn' && t.files && t.files[0]) { const f = t.files[0]; t.value = ''; f.text().then((txt) => showCheck(parseBackup(txt), f.name)).catch((err) => openSheet(`<h2>Not a usable backup</h2><p class="muted" style="margin:10px 0">${esc(err.message || 'Could not read that file')}</p><div class="actions"><button class="btn primary" data-act="close-sheet">Close</button></div>`)); return; }
     if (t.dataset && t.dataset.confirmcovers) { lsSet(LS_CONFIRM, t.checked ? '1' : '0'); toast(t.checked ? 'You’ll be asked to confirm covers after adding games' : 'Covers will not be confirmed after adding'); return; }
     if (t.dataset && t.dataset.autocover) { lsSet(LS_AUTOCOVER, t.checked ? '1' : '0'); if (t.checked) enqueueCovers(libraryCoverEntries()); toast(t.checked ? 'Covers will load automatically' : 'Automatic cover loading is off'); return; }
     if (t.dataset && t.dataset.cover && t.files && t.files[0]) { const f = t.files[0], id = t.dataset.cover; t.value = ''; setCoverFromFile(id, f); return; }
@@ -1342,6 +1463,7 @@
     }
   });
   window.addEventListener('hashchange', () => { closeSheet(); render(); });
+  setInterval(() => { document.querySelectorAll('[data-sess]').forEach((el) => { const g = gameById(el.dataset.sess); if (g && g.sessionAt) el.textContent = fmtHours(sessionMin(g)); }); }, 20000);
 
   // ───────────────────────── updates ─────────────────────────
   let updateSeen = false;

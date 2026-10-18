@@ -325,3 +325,11 @@ a.card.game.withcover { display: flex; gap: 14px; align-items: stretch; }
 .rv-img { display: flex; justify-content: center; margin: 14px 0 10px; }
 .rv-img img { max-height: 44vh; max-width: 70%; border-radius: 14px; border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.45); background: var(--surface2); min-height: 120px; }
 .sheet a.btn { text-decoration: none; }
+
+/* playtime */
+.sess { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 4px 0 10px; padding: 10px 12px; border: 1px solid rgba(34,211,238,.35); border-radius: 12px; background: rgba(34,211,238,.07); }
+.sess b { color: var(--cyan); }
+.sess span { font-size: 22px; font-weight: 700; }
+.live-badge { color: var(--cyan); }
+.hb.wide { grid-template-columns: 104px 1fr 56px; }
+.hb.wide .hb-n { text-align: right; }
