@@ -342,3 +342,14 @@ a.card.game.withcover { display: flex; gap: 14px; align-items: stretch; }
 .mchip { border: 1px solid var(--line); background: var(--surface); color: var(--muted); border-radius: 99px; padding: 5px 10px; font-size: 12.5px; font-weight: 700; min-height: 30px; cursor: pointer; }
 .mchip.studio { color: var(--cyan); border-color: rgba(34,211,238,.4); }
 .mchips { margin: 0 0 12px; }
+
+.hrs-row { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; }
+.hrs-row input { flex: 1; min-width: 0; }
+.hrs-row span { font-weight: 700; color: var(--muted); }
+.prog-chips { margin-top: 6px; }
+
+/* random pick */
+.rnd-btn { margin: 4px 0 12px; border-color: rgba(34,211,238,.45); color: var(--cyan); font-weight: 800; }
+.rnd { text-align: center; margin-top: 10px; }
+.rnd-cv { width: 150px; height: 200px; margin: 0 auto 10px; }
+.rnd-t { font-size: 20px; margin: 0 0 4px; }

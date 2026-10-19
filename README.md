@@ -1,3 +1,15 @@
+## v4.9 – What should I play?
+- Home → **🎲 What should I play?** picks a game for you. Two modes:
+  - **From my list**: a random game from Want to play and Paused (paused is optional). Up next counts 4×, favorites 2.5×, paused 2× as likely as a plain Want-to-play game. It never repeats a game until every one has been shown.
+  - **Something new**: a random game from the built-in list that isn't in your library yet. Released games only, unless you tick "Include upcoming games". Buttons add it as Want to play, Up next, or start it right away.
+- Pick a **platform** and/or **genre** first (any of the 6 platforms and ~25 genres in Something new); it re-rolls as soon as you change a filter.
+- "Pick another" cycles through everything that matches before repeating. "Something new" picks uniformly; there is no ratings data to rank by.
+
+## v4.8.1 – Easier hours and completion
+- **Hours played** is now a plain field on the game page: type the hours you've played so far, or the total it took to finish (e.g. 45.5). It saves when you tap out of the field. Start session and + Add hours are still there as optional helpers.
+- **Completion** has quick buttons (0 / 25 / 50 / 75 / 100%) next to the slider.
+- Setting completion above 0%, or any hours, on a game that is still "Want to play" moves it to **Playing** (you can change the status back any time).
+
 ## v4.8 – Search by genre and studio (part 1 of 2)
 - New file **games-meta.js**: genres and studios (developer + publisher) for all 1,457 built-in games. It was written from general knowledge, not an official database, so some entries may be off; each line is easy to edit (see the comment at the top of the file).
 - **Add games**: the search box now understands genres and studios. Examples: `rpg`, `sports`, `horror ps5`, `fromsoftware`, `rockstar`, `naughty dog`, `ea sports`, `fc 27 ea sports`. Short names work too (`ea`, `sony`, `xbox`, `ubi`). Genre chips under the search box fill it in one tap. Each row shows its genres and main studio.

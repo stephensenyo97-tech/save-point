@@ -7,7 +7,7 @@
   const DB_NAME = 'save-point', STORE = 'kv', KEY = 'state', UNDO_KEY = 'undo';
   const LS_MIRROR = 'savepoint.mirror.v1', LS_UNDO = 'savepoint.undo.v1', LS_DRAFT = 'savepoint.draft.';
   const FORMAT = 2;
-  const APP_VERSION = 'v4.8';
+  const APP_VERSION = 'v4.9';
   const COVERS_KEY = 'covers';
   const LS_PREF = 'savepoint.pickplat', LS_AUTOCOVER = 'savepoint.autocover', LS_CONFIRM = 'savepoint.confirmcovers', LS_REMIND = 'savepoint.remind';
   const PLATFORMS = ['PS5', 'PS4', 'PC', 'Xbox', 'Switch', 'Mobile', 'Other'];
@@ -854,6 +854,80 @@
   }
   const emptyState = (ic, h, p, btn) => `<div class="empty">${icon(ic)}<h3>${esc(h)}</h3><p>${esc(p)}</p>${btn || ''}</div>`;
 
+  // ── "What should I play?": weighted random pick, from your backlog or from the built-in list (something new) ──
+  /** Weight of a backlog game: Up next counts most, then favorites, then paused games you already started. */
+  const pickWeight = (g) => 1 + (g.queue ? 3 : 0) + (g.fav ? 1.5 : 0) + (g.status === 'paused' ? 1 : 0);
+  /** Pure picker: weighted random choice from pool, skipping ids in `seen` until every item has been shown. rnd() is injectable for tests.
+   *  opts.id / opts.weight let it work on library games (id, pickWeight) or built-in list entries (key, equal weight). */
+  function pickRandom(pool, rndFn, seen, opts) {
+    const idOf = (opts && opts.id) || ((g) => g.id), wOf = (opts && opts.weight) || pickWeight; seen = seen || [];
+    if (!pool.length) return null;
+    let cand = pool.filter((g) => !seen.includes(idOf(g)));
+    if (!cand.length) cand = pool.length > 1 ? pool.filter((g) => idOf(g) !== seen[seen.length - 1]) : pool;
+    const total = cand.reduce((a, g) => a + wOf(g), 0); let r = (rndFn || Math.random)() * total;
+    for (const g of cand) { r -= wOf(g); if (r < 0) return g; }
+    return cand[cand.length - 1];
+  }
+  const RND_GENRES = [...MAIN_GENRES, 'Souls-like', 'Roguelike', 'Metroidvania', 'Stealth', 'Co-op', 'Party', 'Anime', 'Fantasy', 'Sci-fi', 'Superhero', 'Football', 'Basketball', 'Fitness'];
+  const rnd = { mode: 'mine', plat: 'all', genre: 'all', paused: true, upcoming: false, seen: [], cur: null };
+  const entryHasGenre = (e, n) => n === 'all' || hasGenre(e, n);
+  function rndPool() {
+    if (rnd.mode === 'new') {
+      const lib = new Set(state.games.map((g) => normKey(g.title)));
+      return CATALOG.filter((e) => !lib.has(e.key) && (rnd.upcoming || !relInfo(e).upcoming) && (rnd.plat === 'all' || e.plats.includes(rnd.plat)) && entryHasGenre(e, rnd.genre));
+    }
+    return state.games.filter((g) => (g.status === 'want' || (rnd.paused && g.status === 'paused')) && !g.sessionAt
+      && (rnd.plat === 'all' || g.platform === rnd.plat)
+      && (rnd.genre === 'all' || (() => { const e = CATALOG_BY_KEY.get(normKey(g.title)); return e && hasGenre(e, rnd.genre); })()));
+  }
+  const rndOpts = () => (rnd.mode === 'new' ? { id: (e) => e.key, weight: () => 1 } : null);
+  function openRandom() {
+    if (!state.games.length) return toast('Add some games first');
+    rnd.mode = state.games.some((g) => g.status === 'want' || g.status === 'paused') ? 'mine' : 'new'; rnd.seen = []; rnd.cur = null; showRandom(true);
+  }
+  function showRandom(reroll) {
+    const isNew = rnd.mode === 'new';
+    if (reroll) { const g = pickRandom(rndPool(), Math.random, rnd.seen, rndOpts()); rnd.cur = g ? (isNew ? g.key : g.id) : null; if (g) rnd.seen.push(rnd.cur); }
+    const backlog = state.games.filter((g) => g.status === 'want' || g.status === 'paused'), poolN = rndPool().length;
+    const plats = isNew ? PLATFORMS.filter((p) => p !== 'Other') : [...new Set(backlog.map((x) => x.platform))].sort();
+    const gc = {}; if (isNew) RND_GENRES.forEach((n) => { gc[n] = 1; }); else backlog.forEach((x) => { const e = CATALOG_BY_KEY.get(normKey(x.title)); if (e) RND_GENRES.forEach((n) => { if (hasGenre(e, n)) gc[n] = 1; }); });
+    const genres = RND_GENRES.filter((n) => gc[n]);
+    const tabs = `<div class="chips" style="margin:10px 0 0"><button type="button" class="chip ${isNew ? '' : 'on'}" data-act="rnd-mode" data-v="mine">From my list</button><button type="button" class="chip ${isNew ? 'on' : ''}" data-act="rnd-mode" data-v="new">Something new</button></div>`;
+    const filters = `<p class="muted small" style="margin:12px 0 -4px">Pick a platform and/or genre, then it chooses for you:</p><div class="filters" style="margin-top:12px"><select data-rnd="plat" aria-label="Platform"><option value="all">Any platform</option>${plats.map((p) => `<option ${rnd.plat === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select>
+      <select data-rnd="genre" aria-label="Genre"><option value="all">Any genre</option>${genres.map((n) => `<option ${rnd.genre === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></div>
+      <label class="check" style="margin-top:6px"><input type="checkbox" data-rnd="${isNew ? 'upcoming' : 'paused'}" ${(isNew ? rnd.upcoming : rnd.paused) ? 'checked' : ''}><span>${isNew ? 'Include upcoming games' : 'Include games I paused'}</span></label>`;
+    let body;
+    if (!isNew) {
+      const g = rnd.cur && gameById(rnd.cur), e = g && CATALOG_BY_KEY.get(normKey(g.title)), info = g ? [g.platform, e && e.tags.slice(0, 3).join(', '), e && e.studios[0]].filter(Boolean).join(' · ') : '';
+      body = g ? `<div class="rnd"><div class="hero-cv rnd-cv" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'full')}</div>
+        <h3 class="rnd-t">${esc(g.title)}</h3><p class="muted small">${esc(info)}</p>
+        <p class="muted small">${g.queue ? 'In your Up next list' : g.status === 'paused' ? 'Paused – you already started it' : 'In your Want to play list'}${poolN > 1 ? ` · 1 of ${poolN} possible` : ''}</p></div>
+        <div class="actions col"><button class="btn primary" data-act="rnd-start" data-id="${esc(g.id)}">Play this next</button>
+        <div class="row"><button class="btn" data-act="rnd-again">${icon('next')}Pick another</button><button class="btn" data-act="rnd-open" data-id="${esc(g.id)}">Open game</button></div></div>`
+        : `<p class="muted" style="margin:14px 0">${backlog.length ? 'Nothing matches those filters.' : 'Nothing on your list to pick from yet. Try “Something new”, or add games as “Want to play” or “Up next”.'}</p>`;
+    } else {
+      const e = rnd.cur && CATALOG_BY_KEY.get(rnd.cur);
+      if (e) enqueueCovers([entryOf(e.title, e.date)]);
+      const r = e && relInfo(e), info = e ? [e.plats.join(' · '), r.label, e.tags.slice(0, 3).join(', '), e.studios[0]].filter(Boolean).join(' · ') : '';
+      body = e ? `<div class="rnd"><div class="hero-cv rnd-cv" data-ck="${esc(e.key)}">${coverHTML({ id: '__rnd', title: e.title, platform: e.plats[0] || 'Other' }, 'full')}</div>
+        <h3 class="rnd-t">${esc(e.title)}</h3><p class="muted small">${esc(info)}</p>
+        <p class="muted small">Not in your library yet${poolN > 1 ? ` · 1 of ${poolN} possible` : ''}</p></div>
+        <div class="actions col"><button class="btn primary" data-act="rnd-add" data-k="${esc(e.key)}" data-as="playing">Start playing it</button>
+        <div class="row"><button class="btn" data-act="rnd-add" data-k="${esc(e.key)}" data-as="want">Want to play</button><button class="btn" data-act="rnd-add" data-k="${esc(e.key)}" data-as="queue">Up next</button></div>
+        <button class="btn" data-act="rnd-again">${icon('next')}Pick another</button></div>`
+        : '<p class="muted" style="margin:14px 0">Nothing new matches those filters.</p>';
+    }
+    openSheet(`<h2>What should I play?</h2>${tabs}${filters}${body}<div class="actions"><button class="btn" data-act="close-sheet">Close</button></div>`);
+  }
+  function rndAdd(key, as) {
+    const e = CATALOG_BY_KEY.get(key); if (!e) return;
+    if (state.games.some((g) => normKey(g.title) === key)) return toast('That game is already in your library');
+    const plat = rnd.plat !== 'all' && e.plats.includes(rnd.plat) ? rnd.plat : multi.pref && e.plats.includes(multi.pref) ? multi.pref : e.plats[0] || 'Other';
+    const g = newGame({ title: e.title, platform: plat, status: as === 'playing' ? 'playing' : 'want' }); if (as === 'queue') g.queue = Date.now();
+    closeSheet(); mutate((s) => { s.games.push(g); }, as === 'playing' ? 'Added and started – have fun!' : as === 'queue' ? 'Added to Up next' : 'Added to Want to play');
+    enqueueCovers(libraryCoverEntries());
+    if (as === 'playing') location.hash = '#/game/' + encodeURIComponent(g.id);
+  }
   function viewHome() {
     const c = (s) => state.games.filter((g) => g.status === s).length;
     const playing = state.games.filter((g) => g.status === 'playing').sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5);
@@ -870,6 +944,7 @@
         <div class="stat good"><b>${c('finished')}</b><span>Completed</span></div>
       </div>
       <div class="substats">${c('want')} want to play · ${c('paused')} paused · ${plural(state.notes.length, 'note')}${state.games.some((g) => g.fav) ? ` · <span class="heart">♥</span> ${state.games.filter((g) => g.fav).length}` : ''}${totalPlayed() ? ` · ${fmtHours(totalPlayed())} played` : ''}</div>
+      <button class="btn block rnd-btn" data-act="random-game">🎲 What should I play?</button>
       ${queued.length ? `<div class="section-title">Up next <a href="#/library" data-act="open-queue">See all</a></div>${queued.map(queueCard).join('')}` : ''}
       <div class="section-title">Continue playing <a href="#/library">All games</a></div>
       ${playing.length ? playing.map(gameCard).join('') : '<p class="muted card">Nothing marked “Playing” right now.</p>'}
@@ -965,11 +1040,12 @@
         <div class="rate" role="group" aria-label="Rating out of 10">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => `<button class="${g.rating === v ? 'on' : ''}" data-act="set-rating" data-id="${esc(g.id)}" data-v="${v}" aria-pressed="${g.rating === v}">${v}</button>`).join('')}</div>
         <label class="f" for="prog">COMPLETION</label>
         <div class="range-row"><input id="prog" type="range" min="0" max="100" step="1" value="${g.progress}" data-progress="${esc(g.id)}"><output id="progOut">${g.progress}%</output></div>
-        <label class="f">HOURS PLAYED <b class="rate-val">${esc(fmtHours(g.played))}</b></label>
+        <div class="chips prog-chips" role="group" aria-label="Set completion">${[0, 25, 50, 75, 100].map((v) => `<button type="button" class="chip ${g.progress === v ? 'on' : ''}" data-act="set-progress" data-id="${esc(g.id)}" data-v="${v}">${v}%</button>`).join('')}</div>
+        <label class="f" for="hrsIn">HOURS PLAYED <span class="muted small" style="text-transform:none;letter-spacing:0">hours so far, or the total it took to finish</span></label>
+        <div class="hrs-row"><input id="hrsIn" type="number" inputmode="decimal" min="0" max="10000" step="0.1" placeholder="0" value="${g.played ? Math.round((g.played / 60) * 100) / 100 : ''}" data-hours="${esc(g.id)}" aria-label="Hours played"><span>h</span></div>
         ${g.sessionAt ? `<div class="sess"><b>Session running</b><span data-sess="${esc(g.id)}">${esc(fmtHours(sessionMin(g)))}</span><small class="muted">since ${esc(fmtTime(g.sessionAt))}</small></div>
         <div class="row"><button class="btn primary" data-act="end-session" data-id="${esc(g.id)}">End session &amp; add hours</button><button class="btn" data-act="cancel-session" data-id="${esc(g.id)}">Discard</button></div>`
-        : `<div class="row"><button class="btn primary" data-act="start-session" data-id="${esc(g.id)}">▶ Start session</button><button class="btn" data-act="add-hours" data-id="${esc(g.id)}">Add hours</button></div>`}
-        ${g.played || (g.plays || []).length ? `<button class="btn sm" data-act="edit-hours" data-id="${esc(g.id)}" style="margin-top:8px">Edit total hours</button>` : ''}
+        : `<div class="row"><button class="btn primary" data-act="start-session" data-id="${esc(g.id)}">▶ Start session</button><button class="btn" data-act="add-hours" data-id="${esc(g.id)}">+ Add hours</button></div>`}
         <div class="dates">
           <label class="f" for="dStart">STARTED</label><label class="f" for="dEnd">FINISHED</label>
           <div class="dwrap"><input id="dStart" type="date" data-date="startedAt" data-id="${esc(g.id)}" value="${esc(g.startedAt)}">${g.startedAt ? `<button class="x" data-act="clear-date" data-k="startedAt" data-id="${esc(g.id)}" aria-label="Clear start date">✕</button>` : ''}</div>
@@ -1407,6 +1483,13 @@
     'set-rating': (t) => { const id = t.dataset.id, v = +t.dataset.v; mutate((s) => { const g = gameById2(s, id); g.rating = g.rating === v ? 0 : v; g.updatedAt = Date.now(); }); },
     'toggle-fav': (t) => { const id = t.dataset.id; mutate((s) => { const g = gameById2(s, id); g.fav = !g.fav; g.updatedAt = Date.now(); }); },
     'toggle-queue': (t) => { const id = t.dataset.id; mutate((s) => { const g = gameById2(s, id); g.queue = g.queue ? 0 : Date.now(); g.updatedAt = Date.now(); }, null); },
+    'set-progress': (t) => { const id = t.dataset.id, v = +t.dataset.v; mutate((s) => { const g = gameById2(s, id); g.progress = v; if (v > 0 && g.status === 'want') applyStatus(g, 'playing'); g.updatedAt = Date.now(); }, v > 0 && (gameById(id) || {}).status === 'want' ? 'Moved to Playing' : null); },
+    'random-game': () => openRandom(),
+    'rnd-again': () => showRandom(true),
+    'rnd-mode': (t) => { rnd.mode = t.dataset.v; rnd.plat = 'all'; rnd.genre = 'all'; rnd.seen = []; showRandom(true); },
+    'rnd-add': (t) => rndAdd(t.dataset.k, t.dataset.as),
+    'rnd-open': (t) => { closeSheet(); location.hash = '#/game/' + encodeURIComponent(t.dataset.id); },
+    'rnd-start': (t) => { const id = t.dataset.id; closeSheet(); mutate((s) => { applyStatus(gameById2(s, id), 'playing'); }, 'Started – have fun!'); location.hash = '#/game/' + encodeURIComponent(id); },
     'start-session': (t) => { const id = t.dataset.id; if (state.games.some((x) => x.sessionAt && x.id !== id)) return toast('Another game already has a session running. End it first.', true); mutate((s) => { const g = gameById2(s, id); if (g.status !== 'playing' && g.status !== 'finished') applyStatus(g, 'playing'); g.sessionAt = Date.now(); g.updatedAt = Date.now(); }, 'Session started – have fun!'); },
     'end-session': (t) => { const id = t.dataset.id, g0 = gameById(id), raw = g0 ? sessionMin(g0) : 0, m = Math.min(MAX_SESSION_MIN, raw); mutate((s) => { const g = gameById2(s, id); g.sessionAt = 0; if (m >= 1) addPlay(g, m); g.updatedAt = Date.now(); }, m >= 1 ? `Added ${fmtHours(m)}${raw > MAX_SESSION_MIN ? ' (capped at 12 h – use Edit total if needed)' : ''}` : 'Session was under a minute, nothing added'); },
     'cancel-session': (t) => { const id = t.dataset.id; mutate((s) => { const g = gameById2(s, id); g.sessionAt = 0; g.updatedAt = Date.now(); }, 'Session discarded'); },
@@ -1415,7 +1498,7 @@
       <div class="chips" style="margin-top:10px">${[0.5, 1, 2, 3].map((v) => `<button class="chip" data-act="hr-fill" data-v="${v}">${v} h</button>`).join('')}</div>
       <div class="actions"><button class="btn" data-act="close-sheet">Cancel</button><button class="btn primary" data-act="do-add-hours" data-id="${esc(id)}">Add</button></div>`); const i = $('#hrIn'); if (i) i.focus(); },
     'hr-fill': (t) => { const i = $('#hrIn'); if (i) i.value = t.dataset.v; },
-    'do-add-hours': (t) => { const id = t.dataset.id, h = parseFloat(($('#hrIn') || {}).value), m = Math.round(h * 60); if (!(h > 0) || m < 1) return toast('Enter the hours you played, like 1.5', true); if (h > 24) return toast('Add up to 24 hours at a time', true); closeSheet(); mutate((s) => addPlay(gameById2(s, id), m), `Added ${fmtHours(m)}`); },
+    'do-add-hours': (t) => { const id = t.dataset.id, h = parseFloat(($('#hrIn') || {}).value), m = Math.round(h * 60); if (!(h > 0) || m < 1) return toast('Enter the hours you played, like 1.5', true); if (h > 24) return toast('Add up to 24 hours at a time', true); closeSheet(); mutate((s) => { const g = gameById2(s, id); addPlay(g, m); if (g.status === 'want') applyStatus(g, 'playing'); }, `Added ${fmtHours(m)}`); },
     'edit-hours': (t) => { const g = gameById(t.dataset.id); if (!g) return; openSheet(`<h2>Edit total hours</h2><p class="muted small" style="margin:6px 0">Set the total for ${esc(g.title)} in hours. This fixes the total only; the weekly chart keeps what was logged.</p>
       <input id="hrIn" type="number" inputmode="decimal" min="0" max="10000" step="0.1" value="${Math.round((g.played / 60) * 100) / 100}" aria-label="Total hours played">
       <div class="actions"><button class="btn" data-act="close-sheet">Cancel</button><button class="btn primary" data-act="do-edit-hours" data-id="${esc(g.id)}">Save</button></div>`); },
@@ -1500,7 +1583,9 @@
   });
   document.addEventListener('change', (e) => {
     const t = e.target;
-    if (t.dataset && t.dataset.progress) { const id = t.dataset.progress, v = Math.round(+t.value); mutate((s) => { const g = gameById2(s, id); g.progress = v; g.updatedAt = Date.now(); }); return; }
+    if (t.dataset && t.dataset.rnd) { const k = t.dataset.rnd; if (k === 'paused' || k === 'upcoming') rnd[k] = t.checked; else rnd[k] = t.value; rnd.seen = []; showRandom(true); return; }
+    if (t.dataset && t.dataset.hours) { const id = t.dataset.hours, raw = String(t.value).trim(), h = raw === '' ? 0 : parseFloat(raw); if (!(h >= 0) || h > 10000) { toast('Enter the hours as a number, like 12.5', true); render(); return; } const m = Math.round(h * 60); mutate((s) => { const g = gameById2(s, id); g.played = m; if (m > 0 && g.status === 'want') applyStatus(g, 'playing'); g.updatedAt = Date.now(); }, m ? `Saved ${fmtHours(m)}` : 'Hours cleared'); return; }
+    if (t.dataset && t.dataset.progress) { const id = t.dataset.progress, v = Math.round(+t.value); mutate((s) => { const g = gameById2(s, id); g.progress = v; if (v > 0 && g.status === 'want') applyStatus(g, 'playing'); g.updatedAt = Date.now(); }); return; }
     if (t.dataset && t.dataset.date) { const id = t.dataset.id, k = t.dataset.date, v = /^\d{4}-\d{2}-\d{2}$/.test(t.value) ? t.value : ''; mutate((s) => { const g = gameById2(s, id); g[k] = v; g.updatedAt = Date.now(); }); return; }
     if (t.dataset && t.dataset.pickopt) { if (t.dataset.pickopt === 'plat') { multi.pref = t.value; lsSet(LS_PREF, t.value); } else multi.status = t.value; return; }
     if (t.dataset && t.dataset.bind && t.tagName === 'SELECT') { ui[t.dataset.bind] = t.value; const lb = $('#listBox'); if (lb) lb.innerHTML = libraryList(); return; }
@@ -1567,6 +1652,6 @@
     }
   }
   // test hook (read-only helpers, harmless in production)
-  window.__savePoint = { get state() { return state; }, get covers() { return covers; }, storage, parseBackup, CATALOG, APP_VERSION, covq, cat, catMiss, titleVariants };
+  window.__savePoint = { pickRandom, pickWeight, rndPool, rnd, get state() { return state; }, get covers() { return covers; }, storage, parseBackup, CATALOG, APP_VERSION, covq, cat, catMiss, titleVariants };
   boot();
 })();
