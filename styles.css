@@ -333,3 +333,12 @@ a.card.game.withcover { display: flex; gap: 14px; align-items: stretch; }
 .live-badge { color: var(--cyan); }
 .hb.wide { grid-template-columns: 104px 1fr 56px; }
 .hb.wide .hb-n { text-align: right; }
+
+/* genres & studios */
+.filters .f-wide { grid-column: 1 / -1; }
+.pk-main small.pk-tags { color: var(--cyan); opacity: .85; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pickGenres { margin-top: 8px; }
+.mchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mchip { border: 1px solid var(--line); background: var(--surface); color: var(--muted); border-radius: 99px; padding: 5px 10px; font-size: 12.5px; font-weight: 700; min-height: 30px; cursor: pointer; }
+.mchip.studio { color: var(--cyan); border-color: rgba(34,211,238,.4); }
+.mchips { margin: 0 0 12px; }

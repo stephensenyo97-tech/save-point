@@ -1,3 +1,12 @@
+## v4.8 – Search by genre and studio (part 1 of 2)
+- New file **games-meta.js**: genres and studios (developer + publisher) for all 1,457 built-in games. It was written from general knowledge, not an official database, so some entries may be off; each line is easy to edit (see the comment at the top of the file).
+- **Add games**: the search box now understands genres and studios. Examples: `rpg`, `sports`, `horror ps5`, `fromsoftware`, `rockstar`, `naughty dog`, `ea sports`, `fc 27 ea sports`. Short names work too (`ea`, `sony`, `xbox`, `ubi`). Genre chips under the search box fill it in one tap. Each row shows its genres and main studio.
+- **Library**: the search box also matches genres and studios of your games from the built-in list, and there is a **Genre** filter. Games you typed in yourself have no genres.
+- **Game page**: genre and studio chips; tap one to search your library for it.
+- **Stats**: a "By genre" card.
+- Added **EA Sports FC 27** (out 25 Sep 2026).
+- Part 2 (next) refreshes the upcoming-release dates in the list and adds countdowns.
+
 ## v4.7 – Hours played (phase 3 of 3)
 - Everything is shown in **hours** (e.g. "12.5 h"). Under the game's completion slider: **Start session** (timer), **End session & add hours**, **Add hours** (type 1.5 for an hour and a half), **Edit total hours**.
 - Starting a session sets the game to Playing (unless finished). Only one session can run at a time. A session counts from the clock, so it keeps running if you close the app; one session is capped at 12 h when ended (use Edit total if you really played longer). Under 1 minute adds nothing.

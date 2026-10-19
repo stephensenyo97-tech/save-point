@@ -342,6 +342,7 @@ EA Sports College Football 27 | PS5 PC Xbox | 2026
 EA Sports FC 24 | PS5 PS4 PC Xbox Switch | 2023
 EA Sports FC 25 | PS5 PS4 PC Xbox Switch | 2024
 EA Sports FC 26 | PS5 PS4 PC Xbox Switch | 2025
+EA Sports FC 27 | PS5 PS4 PC Xbox Switch | 2026-09-25
 EA Sports FC Mobile | Mobile | 2023
 EA Sports PGA Tour | PS5 PC Xbox
 EA Sports Skate | PS5 PC Xbox

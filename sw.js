@@ -3,7 +3,7 @@
  * IMPORTANT: when you change any app file, bump VERSION so phones fetch the new files.
  * This file never touches journal data (that lives in IndexedDB, not in the cache).
  */
-const VERSION = 'v4.7';
+const VERSION = 'v4.8';
 const CACHE = 'save-point-' + VERSION;
 const ASSETS = [
   './',
@@ -11,6 +11,7 @@ const ASSETS = [
   './styles.css',
   './app.js',
   './games-catalog.js',
+  './games-meta.js',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',

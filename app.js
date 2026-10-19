@@ -7,7 +7,7 @@
   const DB_NAME = 'save-point', STORE = 'kv', KEY = 'state', UNDO_KEY = 'undo';
   const LS_MIRROR = 'savepoint.mirror.v1', LS_UNDO = 'savepoint.undo.v1', LS_DRAFT = 'savepoint.draft.';
   const FORMAT = 2;
-  const APP_VERSION = 'v4.7';
+  const APP_VERSION = 'v4.8';
   const COVERS_KEY = 'covers';
   const LS_PREF = 'savepoint.pickplat', LS_AUTOCOVER = 'savepoint.autocover', LS_CONFIRM = 'savepoint.confirmcovers', LS_REMIND = 'savepoint.remind';
   const PLATFORMS = ['PS5', 'PS4', 'PC', 'Xbox', 'Switch', 'Mobile', 'Other'];
@@ -723,6 +723,33 @@
     return [...map.values()];
   })();
   const CATALOG_BY_KEY = new Map(CATALOG.map((g) => [g.key, g]));
+  // genres & studios (games-meta.js): searchable words per game = title tags + developer/publisher + platforms (+ short names people type)
+  const STUDIO_NICK = [[/electronic arts|ea sports/i, 'ea'], [/sony interactive/i, 'sony playstation sie'], [/xbox game studios|microsoft/i, 'xbox microsoft'], [/warner bros/i, 'wb warner'], [/take-two/i, 'take two'], [/cd projekt/i, 'cdpr'], [/ubisoft/i, 'ubi'], [/fromsoftware/i, 'fromsoft'], [/bandai namco/i, 'bandai']];
+  (() => {
+    const map = new Map();
+    String(window.SP_META_TEXT || '').split('\n').forEach((line) => {
+      line = line.trim(); if (!line || line[0] === '#') return;
+      const p = line.split('|').map((x) => x.trim()), key = normKey(p[0] || ''); if (!key) return;
+      map.set(key, { tags: (p[1] || '').split(',').map((x) => x.trim()).filter(Boolean), studios: (p[2] || '').split(',').map((x) => x.trim()).filter(Boolean) });
+    });
+    CATALOG.forEach((g) => {
+      const m = map.get(g.key); g.tags = m ? m.tags : []; g.studios = m ? m.studios : [];
+      const extra = STUDIO_NICK.filter(([rx]) => g.studios.some((x) => rx.test(x))).map((x) => x[1]).join(' ');
+      g.mw = [...new Set(normKey(g.tags.join(' ') + ' ' + g.studios.join(' ') + ' ' + extra + ' ' + g.plats.join(' ')).split(' ').filter(Boolean))];
+    });
+  })();
+  const MAIN_GENRES = ['RPG', 'Action', 'Adventure', 'Shooter', 'Sports', 'Racing', 'Fighting', 'Horror', 'Platformer', 'Strategy', 'Simulation', 'Survival', 'Puzzle', 'Open world'];
+  const PICK_GENRES = ['RPG', 'Shooter', 'Sports', 'Racing', 'Fighting', 'Horror', 'Adventure', 'Platformer', 'Strategy', 'Simulation', 'Survival', 'Puzzle', 'Open world', 'Co-op', 'Anime'];
+  const GENRE_RX = { RPG: /rpg$/i, Shooter: /shooter$|^fps$/i };
+  const hasGenre = (e, name) => e.tags.some((t) => (GENRE_RX[name] ? GENRE_RX[name].test(t) : t === name));
+  const SYN = { coop: 'co op', scifi: 'sci fi', openworld: 'open world', battleroyale: 'battle royale', shooting: 'shooter', scary: 'horror', sim: 'simulation', sport: 'sports', souls: 'souls like', soulslike: 'souls like', beatemup: 'beat em up' };
+  const wordHit = (key, kw, w) => (w.length >= 3 ? key.includes(w) : key.split(' ').some((x) => x.startsWith(w))) || kw.some((x) => x.startsWith(w));
+  /** Does a typed search match this library game's title, genres or studios? (only games from the built-in list have genres/studios) */
+  function libMatches(g, q) {
+    const ql = q.toLowerCase(); if (g.title.toLowerCase().includes(ql) || g.platform.toLowerCase().includes(ql)) return true;
+    const e = CATALOG_BY_KEY.get(normKey(g.title)); if (!e) return false;
+    return normKey(expandQuery(q)).split(' ').every((w) => wordHit(e.key, e.mw, w));
+  }
   /** Release info for a catalog entry: label shown to the user, whether it is still to come, and a sortable number. */
   function relInfo(g) {
     const d = g.date, today = todayStr();
@@ -737,6 +764,7 @@
   function expandQuery(q) {
     return normKey(q).split(' ').map((w) => {
       const m = /^([a-z]+?)(\d+)$/.exec(w);
+      if (SYN[w]) return SYN[w];
       if (ALIASES[w]) return ALIASES[w];
       if (m && ALIASES[m[1]]) return ALIASES[m[1]] + ' ' + m[2];
       return w;
@@ -751,12 +779,14 @@
       let score;
       if (g.key.startsWith(k)) score = 0;
       else if (g.key.split(' ').some((w) => w.startsWith(words[0])) && words.every((w) => g.key.includes(w))) score = 1;
-      else if (words.every((w) => g.key.includes(w))) score = 2;
+      else if (words.every((w) => (w.length >= 3 ? g.key.includes(w) : g.key.split(' ').some((x) => x.startsWith(w))))) score = 2;
+      else if (words.every((w) => wordHit(g.key, g.mw, w))) score = 3; // matched through genre / studio / platform words
       else continue;
       if (g.key === k && !keepExact) continue; // already typed in full
-      scored.push([score, g.key.length, g]);
+      const rs = relInfo(g).sort;
+      scored.push([score, score >= 3 ? -(rs >= 99999999 ? 0 : rs) : g.key.length, g]);
     }
-    scored.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    scored.sort((a, b) => a[0] - b[0] || a[1] - b[1] || (a[2].key < b[2].key ? -1 : 1));
     return scored.slice(0, limit).map((x) => x[2]);
   }
   function showSuggestions(form) {
@@ -766,7 +796,7 @@
   }
 
   // ───────────────────────── UI plumbing ─────────────────────────
-  const ui = { libQ: '', libStatus: 'all', libPlat: 'all', libSort: 'recent', updated: false, jQ: '', jType: 'all', gType: 'all' };
+  const ui = { libQ: '', libStatus: 'all', libPlat: 'all', libSort: 'recent', updated: false, jQ: '', jType: 'all', gType: 'all', libGenre: 'all' };
   let toastTimer = null, shareUrl = null, shareState = null;
   function toast(msg, isErr) {
     const t = $('#toast'); t.textContent = msg; t.className = 'show' + (isErr ? ' err' : '');
@@ -851,7 +881,8 @@
   function libraryList() {
     let list = state.games.slice();
     const q = ui.libQ.trim().toLowerCase();
-    if (q) list = list.filter((g) => g.title.toLowerCase().includes(q) || g.platform.toLowerCase().includes(q));
+    if (q) list = list.filter((g) => libMatches(g, q));
+    if (ui.libGenre !== 'all') list = list.filter((g) => { const e = CATALOG_BY_KEY.get(normKey(g.title)); return e && hasGenre(e, ui.libGenre); });
     if (ui.libStatus === 'fav') list = list.filter((g) => g.fav);
     else if (ui.libStatus === 'queue') list = list.filter((g) => g.queue);
     else if (ui.libStatus !== 'all') list = list.filter((g) => g.status === ui.libStatus);
@@ -864,14 +895,17 @@
   }
   function viewLibrary() {
     const plats = [...new Set(state.games.map((g) => g.platform))].sort();
+    const gcount = {}; state.games.forEach((g) => { const e = CATALOG_BY_KEY.get(normKey(g.title)); if (e) MAIN_GENRES.forEach((n) => { if (hasGenre(e, n)) gcount[n] = (gcount[n] || 0) + 1; }); });
+    const libGenres = MAIN_GENRES.filter((n) => gcount[n]).map((n) => [n, gcount[n]]);
     const chips = [{ id: 'all', label: 'All' }, ...STATUSES, { id: 'fav', label: '♥ Favorites' }, { id: 'queue', label: 'Up next' }].map((s) => `<button class="chip ${ui.libStatus === s.id ? 'on' : ''}" data-act="set-ui" data-k="libStatus" data-v="${s.id}">${esc(s.label)}</button>`).join('');
     return {
       title: 'Library', fab: { label: 'Game', act: 'add-game' }, html: `
-      <input type="search" placeholder="Search games…" value="${esc(ui.libQ)}" data-bind="libQ" aria-label="Search games" enterkeyhint="search">
+      <input type="search" placeholder="Search games, genres, studios…" value="${esc(ui.libQ)}" data-bind="libQ" aria-label="Search games, genres or studios" enterkeyhint="search">
       <div class="chips" style="margin-top:10px">${chips}</div>
       <div class="filters">
         <select data-bind="libPlat" aria-label="Platform"><option value="all">All platforms</option>${plats.map((p) => `<option ${ui.libPlat === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select>
         <select data-bind="libSort" aria-label="Sort"><option value="recent" ${ui.libSort === 'recent' ? 'selected' : ''}>Recently active</option><option value="title" ${ui.libSort === 'title' ? 'selected' : ''}>Title A–Z</option><option value="progress" ${ui.libSort === 'progress' ? 'selected' : ''}>Most complete</option><option value="rating" ${ui.libSort === 'rating' ? 'selected' : ''}>Highest rated</option><option value="played" ${ui.libSort === 'played' ? 'selected' : ''}>Most hours played</option></select>
+        ${libGenres.length ? `<select data-bind="libGenre" aria-label="Genre" class="f-wide"><option value="all">All genres</option>${libGenres.map(([n, c]) => `<option value="${esc(n)}" ${ui.libGenre === n ? 'selected' : ''}>${esc(n)} (${c})</option>`).join('')}</select>` : ''}
       </div>
       ${state.games.some((g) => !covers[g.id]) ? `<button class="btn sm block" data-act="fetch-all-covers" style="margin-top:12px">Find covers for my games</button>` : ''}
       <div id="listBox">${libraryList()}</div>`
@@ -897,6 +931,12 @@
     return { title: 'Journal', fab: null, html: `<input type="search" placeholder="Search all notes…" value="${esc(ui.jQ)}" data-bind="jQ" aria-label="Search notes" enterkeyhint="search"><div class="chips" style="margin-top:10px">${chips}</div><div id="listBox">${journalList()}</div>` };
   }
 
+  /** Genre and studio chips for a game from the built-in list; tapping one searches your library for it. */
+  function gameMetaChips(g) {
+    const e = CATALOG_BY_KEY.get(normKey(g.title)); if (!e || (!e.tags.length && !e.studios.length)) return '';
+    const chip = (t) => `<button type="button" class="mchip" data-act="search-lib" data-q="${esc(t)}">${esc(t)}</button>`;
+    return `<div class="mchips">${e.tags.slice(0, 4).map(chip).join('')}${e.studios.slice(0, 2).map((x) => chip(x).replace('class="mchip"', 'class="mchip studio"')).join('')}</div>`;
+  }
   function viewGame(id) {
     const g = gameById(id);
     if (!g) return { title: 'Not found', back: '#/library', fab: null, html: emptyState('library', 'Game not found', 'It may have been deleted.', '<a class="btn primary" href="#/library">Back to library</a>') };
@@ -915,6 +955,7 @@
           ${covers[g.id] ? `<button class="btn sm" data-act="clear-cover" data-id="${esc(g.id)}">Use generated cover</button>` : ''}
           <input id="coverIn" type="file" accept="image/*" data-cover="${esc(g.id)}" hidden>
         </div></div>
+        ${gameMetaChips(g)}
         <div class="seg" role="group" aria-label="Status">${STATUSES.map((s) => `<button class="${g.status === s.id ? 'on' : ''}" data-act="quick-status" data-id="${g.id}" data-v="${s.id}">${esc(s.label)}</button>`).join('')}</div>
         <div class="row tog">
           <button class="btn ${g.fav ? 'on fav' : ''}" data-act="toggle-fav" data-id="${esc(g.id)}" aria-pressed="${g.fav}">${icon('heart')}${g.fav ? 'Favorite' : 'Add to favorites'}</button>
@@ -945,6 +986,13 @@
 
 
   // ───────────────────────── stats ─────────────────────────
+  function genreCard() {
+    const cnt = {}; let known = 0;
+    state.games.forEach((g) => { const e = CATALOG_BY_KEY.get(normKey(g.title)); if (!e || !e.tags.length) return; known++; MAIN_GENRES.forEach((n) => { if (hasGenre(e, n)) cnt[n] = (cnt[n] || 0) + 1; }); });
+    const rows = Object.entries(cnt).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 8), mx = rows.length ? rows[0][1] : 0;
+    if (!rows.length) return '';
+    return `<div class="card"><h3 class="ct">By genre</h3>${rows.map(([l, n]) => `<div class="hb"><span class="hb-l">${esc(l)}</span><div class="hb-t"><i style="width:${Math.max(4, Math.round((n / mx) * 100))}%"></i></div><span class="hb-n">${n}</span></div>`).join('')}<p class="muted small" style="margin-top:8px">A game can count under more than one genre. Only games from the built-in list have genres (${known} of ${state.games.length} here).</p></div>`;
+  }
   function hoursCard() {
     const tot = totalPlayed(), w = weekly(), wMax = Math.max(...w);
     const top = state.games.filter((g) => g.played).sort((a, b) => b.played - a.played || a.title.localeCompare(b.title)).slice(0, 5), tMax = top.length ? top[0].played : 0;
@@ -986,6 +1034,7 @@
       </div>
       <div class="substats">${rated.length ? plural(rated.length, 'rated game') : 'No ratings yet'} · ${plural(state.notes.length, 'note')}${avgDays ? ` · finish in ~${plural(avgDays, 'day')}` : ''}</div>
       ${hoursCard()}
+      ${genreCard()}
       <div class="card"><h3 class="ct">By status</h3>${stCounts.map(([l, n, id]) => hbar(l, n, stMax, 'st-' + id)).join('')}</div>
       <div class="card"><h3 class="ct">Your ratings</h3>${rated.length ? `<div class="hist">${dist.map((n, i) => `<div class="hcol"><small>${n || ''}</small><div class="hc-t"><i style="height:${Math.round((n / dMax) * 100)}%"></i></div><b>${i + 1}</b></div>`).join('')}</div>` : '<p class="sub">Rate a game 1–10 to see how you score things.</p>'}</div>
       <div class="card"><h3 class="ct">By platform</h3>${pl.map(([l, n]) => hbar(l, n, pMax)).join('')}</div>
@@ -1252,14 +1301,15 @@
     const searching = normKey(multi.q).length >= 2;
     let html = slice.map((g) => {
       const on = multi.sel.has(g.key), inLib = lib.has(g.key), r = relInfo(g);
-      const meta = [g.plats.join(' · '), r.label].filter(Boolean).join(' · ');
-      return `<button type="button" class="pick ${on ? 'on' : ''}" data-act="toggle-pick" data-k="${esc(g.key)}" ${inLib ? 'disabled' : ''} aria-pressed="${on}"><span class="tick">${CHECK}</span><span class="gc-cover xs" data-ck="${esc(g.key)}">${thumbFor(g.title)}</span><span class="pk-main"><b>${esc(g.title)}</b><small>${esc(meta) || '&nbsp;'}</small></span>${inLib ? '<em>In library</em>' : r.upcoming ? '<em class="soon">Soon</em>' : ''}</button>`;
+      const meta = [g.plats.join(' · '), r.label].filter(Boolean).join(' · '), meta2 = [g.tags.slice(0, 3).join(', '), g.studios[0]].filter(Boolean).join(' · ');
+      return `<button type="button" class="pick ${on ? 'on' : ''}" data-act="toggle-pick" data-k="${esc(g.key)}" ${inLib ? 'disabled' : ''} aria-pressed="${on}"><span class="tick">${CHECK}</span><span class="gc-cover xs" data-ck="${esc(g.key)}">${thumbFor(g.title)}</span><span class="pk-main"><b>${esc(g.title)}</b><small>${esc(meta) || '&nbsp;'}</small>${meta2 ? `<small class="pk-tags">${esc(meta2)}</small>` : ''}</span>${inLib ? '<em>In library</em>' : r.upcoming ? '<em class="soon">Soon</em>' : ''}</button>`;
     }).join('');
     if (all.length > slice.length) html += `<button type="button" class="btn block" data-act="pick-more" style="margin:8px 0">Show more (${all.length - slice.length} left)</button>`;
     if (!all.length) html += `<p class="muted pick-none">${searching ? 'No match in the built-in list.' : 'Nothing here yet.'}</p>`;
     html += `<button type="button" class="pick-custom" data-act="add-custom">${searching ? `Add “${esc(multi.q.trim())}” myself` : 'Can’t find it? Add a game myself'}</button>`;
     return html;
   }
+  const pickGenreChips = () => PICK_GENRES.map((v) => `<button type="button" class="chip ${multi.q.trim().toLowerCase() === v.toLowerCase() ? 'on' : ''}" data-act="pick-genre" data-v="${esc(v)}">${esc(v)}</button>`).join('');
   function pickChips() {
     const searching = normKey(multi.q).length >= 2;
     if (searching) return `<span class="muted small" style="padding:0 2px">${plural(multiEntries().length, 'result')}</span>`;
@@ -1273,14 +1323,15 @@
     const list = $('#pickList'); if (!list) return;
     const top = list.scrollTop;
     list.innerHTML = pickRows(); list.scrollTop = keepScroll ? top : 0;
-    $('#pickChips').innerHTML = pickChips(); pickFoot();
+    $('#pickChips').innerHTML = pickChips(); const gc = $('#pickGenres'); if (gc) gc.innerHTML = pickGenreChips(); pickFoot();
     enqueueCovers(multiEntries().slice(0, multi.shown).map((g) => entryOf(g.title, g.date)));
   }
   function multiAdd() {
     multi.q = ''; multi.mode = 'new'; multi.sel = new Map(); multi.shown = 60;
     openSheet(`<div class="pk-head"><h2>Add games</h2><button type="button" class="btn sm" data-act="add-custom">Type my own</button></div>
-      <input id="pickQ" type="search" placeholder="Search ${CATALOG.length} games…" data-multiq="1" aria-label="Search games" enterkeyhint="search" autocomplete="off" autocapitalize="off">
-      <div class="chips" id="pickChips" style="margin-top:8px"></div>
+      <input id="pickQ" type="search" placeholder="Search games, genres or studios…" data-multiq="1" aria-label="Search games, genres or studios" enterkeyhint="search" autocomplete="off" autocapitalize="off">
+      <div class="chips" id="pickGenres" style="margin-top:8px"></div>
+      <div class="chips" id="pickChips"></div>
       <div id="pickList" class="pick-list"></div>
       <div class="pick-foot">
         <div class="pf-row">
@@ -1349,6 +1400,8 @@
       t.classList.toggle('on', multi.sel.has(e.key)); t.setAttribute('aria-pressed', multi.sel.has(e.key)); pickFoot();
     },
     'pick-more': () => { multi.shown += 80; refreshMulti(true); },
+    'pick-genre': (t) => { const v = t.dataset.v, inp = $('#pickQ'); multi.q = multi.q.trim().toLowerCase() === v.toLowerCase() ? '' : v; if (inp) inp.value = multi.q; multi.shown = 60; refreshMulti(); },
+    'search-lib': (t) => { ui.libQ = t.dataset.q || ''; ui.libStatus = 'all'; ui.libPlat = 'all'; ui.libGenre = 'all'; location.hash = '#/library'; },
     'pick-mode': (t) => { multi.mode = t.dataset.v; multi.shown = 60; refreshMulti(); },
     'add-picked': () => addPicked(),
     'set-rating': (t) => { const id = t.dataset.id, v = +t.dataset.v; mutate((s) => { const g = gameById2(s, id); g.rating = g.rating === v ? 0 : v; g.updatedAt = Date.now(); }); },
