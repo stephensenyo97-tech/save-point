@@ -1464,4 +1464,44 @@ Yoshi and the Mysterious Book | Platformer,Adventure | Good-Feel,Nintendo
 Ys X: Proud Nordics | Action RPG,JRPG | Nihon Falcom,NIS America,XSEED Games
 Zenless Zone Zero | Action RPG,Anime,Gacha | HoYoverse,miHoYo
 Zombie Army 4: Dead War | Shooter,Zombie,Third-person shooter,Co-op | Rebellion
+End of Abyss | Action,Sci-fi,Third-person shooter |
+Octopath Traveler I & II | JRPG,RPG,Fantasy | Square Enix,Acquire
+Forever Ago | Adventure |
+Kingdom Hearts Collection | Action RPG,JRPG,Fantasy | Square Enix,Disney
+Order of the Sinking Star | Puzzle | Thekla Inc.
+Penguin Colony | Simulation,Strategy |
+Star Trek: Outposts Unknown | Strategy,Sci-fi |
+We Were Here Tomorrow | Puzzle,Co-op,Horror | Total Mayhem Games
+Mycopunk | Shooter,Co-op,Sci-fi | Pigeons at Play,Devolver Digital
+One Piece: Grand Gourmet | Simulation,Anime | Bandai Namco
+Hunter's Moon | Action,Adventure |
+Queen's Domain | Strategy,Roguelike |
+Godzilla: Destroy All Monsters Melee Remastered | Fighting,Arcade | Pipeworks,Bandai Namco
+World of Warcraft: Forever | MMORPG,RPG,Fantasy | Blizzard Entertainment
+Crymelight | Action RPG,Fantasy |
+Edge of Memories | Action RPG,Anime |
+The Legend of Zelda: Ocarina of Time Remake | Action,Adventure,Fantasy | Nintendo
+Football Manager 27 | Sports,Football,Soccer,Management,Simulation | Sports Interactive,Sega
+Sonic Pico Park | Platformer,Party,Co-op | Sega,Sonic Team
+Hela: Of Mice & Magic | Action,Adventure |
+Warhammer 40,000: Dawn of War IV | Strategy,RTS,Sci-fi | Relic Entertainment,Sega
+Professor Layton and the New World of Steam | Puzzle,Adventure | Level-5
+Stage Tour | Music,Rhythm |
+Metroid Ravenous | Action,Adventure,Metroidvania | Nintendo
+Muramasa: Revenant Blades | Action,Hack and slash | Vanillaware
+Wo Long 2: Wings of Ember | Action RPG,Souls-like | Team Ninja,Koei Tecmo
+Gundam Rogue Orbit | Action,Sci-fi | Bandai Namco
+Eternal Anima | Action RPG,Fantasy |
+Kena: Scars of Kosmora | Action,Adventure | Ember Lab
+Kirby and the World Beyond | Platformer,Action | HAL Laboratory,Nintendo
+Monster Hunter Wilds: Ascendance | Action RPG,Co-op,Monster hunting | Capcom
+Xenoblade Genesis | JRPG,RPG,Fantasy | Monolith Soft,Nintendo
+Dragon Ball Xenoverse 3 | Fighting,Action RPG,Anime | Bandai Namco
+Turok: Origins | Action,Shooter | Saber Interactive
+Senua | Action,Adventure | Ninja Theory,Xbox Game Studios
+Guild Wars 3 | MMORPG,RPG,Fantasy | ArenaNet,NCSoft
+Virtua Fighter Crossroads | Fighting,Arcade | Ryu Ga Gotoku Studio,Sega
+Outward 2 | Action RPG,Open world,Co-op | Nine Dots Studio
+Heroes of Might and Magic III Remake | Strategy,Turn-based | Ubisoft
+Rainbow Six Tactics | Strategy,Shooter,Tactical | Ubisoft
 `;

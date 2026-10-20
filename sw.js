@@ -3,7 +3,7 @@
  * IMPORTANT: when you change any app file, bump VERSION so phones fetch the new files.
  * This file never touches journal data (that lives in IndexedDB, not in the cache).
  */
-const VERSION = 'v4.9';
+const VERSION = 'v5.2';
 const CACHE = 'save-point-' + VERSION;
 const ASSETS = [
   './',

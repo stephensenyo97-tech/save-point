@@ -1,3 +1,26 @@
+## v5.2 – Note tags, better search, year in review (part 3 of 3)
+- **Tags on notes**: in the note form add tags separated by commas (e.g. `boss, missable, secret`). Up to 8 per note, lowercase, 24 characters each; your existing tags appear as quick-tap suggestions. Tags show on each note; tap one to open the Journal filtered to it.
+- **Journal**: a row of tag chips with counts, and a smarter search: every word must match somewhere in the note's title, text, tags or game name (`#secret statue`, `hades fast`).
+- **Game page**: a notes search box appears once a game has 6 or more notes.
+- **Year in review** (Stats → "Your year in review", or `#/year`): finished / started / added counts, finished per month, top-rated finishes, everything you finished, most played, platforms and genres finished, most-used tags, and a shareable 1080×1350 image card. Switch between years with the chips.
+  - It is built only from dates already saved: finish date, start date, date added, note dates, and hours logged in the app since v4.7. Games finished without a finish date aren't counted; hours typed in as a single total have no date, so they aren't in "hours logged".
+- Backups: tags are saved in the backup file; older backups without tags import fine.
+- Not tested on a real iPhone; only desktop Chromium with mocks.
+
+## v5.1 – Upcoming releases (part 2 of 3)
+- **Countdowns**: games with an exact release date show "Out in 3 days", "Out tomorrow", "Out today" or "Out in 2 months" on library cards, the game page, Add games and the picker. Games with only a year (e.g. 2027) or TBA show no countdown.
+- **Home → Releasing soon**: Want to play games (including Up next) releasing within 90 days, soonest first, kept for a week after release as "Out now". "See all" opens the Library's **📅 Upcoming** filter.
+- **Add games → Only upcoming**: unreleased games sorted by date.
+- Release dates were checked against two public release calendars on 19 Oct 2026 and matched; 22 more games with confirmed dates were added (they have no genre/studio info yet). Dates can move: the app can't update itself, so recheck before relying on one.
+- Known limits: one date per game for all platforms (e.g. Forza Horizon 6 is dated for Xbox/PC; its PS5 version is Jan 2027). Early-access games such as Path of Exile 2 keep their early-access date.
+- No push notifications: iPhone can't schedule them from a web app without a server.
+
+## v5.0 – Backup notice on the Backup page, cleaner Want to play (part 1 of 3)
+- The **backup reminder** no longer sits on Home/Stats. It shows only at the top of the **Backup** page (with a "Back up now" button), plus a small dot on the Backup tab when a backup is due. The "Remind me to back up" setting is on the same page.
+- **Want to play** games no longer show rating, completion or hours (you haven't played them). The game page shows "Not started yet" with a **Start playing** button; tapping **Finished** still reveals rating and sets 100%. Library cards hide the empty progress bar for these games.
+- If the app ever opens with an empty library on a phone that used to have games, Home offers "Restore from a backup file" (already present since earlier versions).
+- Not yet tested on a real iPhone; only desktop Chromium with mocks.
+
 ## v4.9 – What should I play?
 - Home → **🎲 What should I play?** picks a game for you. Two modes:
   - **From my list**: a random game from Want to play and Paused (paused is optional). Up next counts 4×, favorites 2.5×, paused 2× as likely as a plain Want-to-play game. It never repeats a game until every one has been shown.

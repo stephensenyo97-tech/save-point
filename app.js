@@ -5,9 +5,9 @@
 (() => {
   // ───────────────────────── constants ─────────────────────────
   const DB_NAME = 'save-point', STORE = 'kv', KEY = 'state', UNDO_KEY = 'undo';
-  const LS_MIRROR = 'savepoint.mirror.v1', LS_UNDO = 'savepoint.undo.v1', LS_DRAFT = 'savepoint.draft.';
+  const LS_MIRROR = 'savepoint.mirror.v1', LS_UNDO = 'savepoint.undo.v1', LS_DRAFT = 'savepoint.draft.', LS_HAD = 'savepoint.hadgames';
   const FORMAT = 2;
-  const APP_VERSION = 'v4.9';
+  const APP_VERSION = 'v5.2';
   const COVERS_KEY = 'covers';
   const LS_PREF = 'savepoint.pickplat', LS_AUTOCOVER = 'savepoint.autocover', LS_CONFIRM = 'savepoint.confirmcovers', LS_REMIND = 'savepoint.remind';
   const PLATFORMS = ['PS5', 'PS4', 'PC', 'Xbox', 'Switch', 'Mobile', 'Other'];
@@ -82,6 +82,14 @@
       createdAt: num(g.createdAt, Date.now()), updatedAt: num(g.updatedAt, Date.now())
     };
   }
+  /** Tags: lowercase, no '#', up to 8 per note, 24 characters each. */
+  function cleanTags(a) {
+    const out = [];
+    (Array.isArray(a) ? a : []).forEach((t) => { t = String(t == null ? '' : t).replace(/#/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 24).trim(); if (t && !out.includes(t) && out.length < 8) out.push(t); });
+    return out;
+  }
+  /** "boss, missable #secret" → ['boss','missable','secret'] */
+  const parseTags = (text) => cleanTags(String(text || '').split(/[,;\n#]+/));
   function cleanNote(n) {
     if (!n || typeof n !== 'object') return null;
     const gameId = cid(n.gameId);
@@ -90,7 +98,7 @@
     const createdAt = num(n.createdAt, Date.now());
     return {
       id: cid(n.id) || uid(), gameId, title, body,
-      type: NOTE_TYPES.some((t) => t.id === n.type) ? n.type : 'general',
+      type: NOTE_TYPES.some((t) => t.id === n.type) ? n.type : 'general', tags: cleanTags(n.tags),
       date: /^\d{4}-\d{2}-\d{2}$/.test(n.date || '') ? n.date : dateStr(new Date(createdAt)),
       createdAt, updatedAt: num(n.updatedAt, createdAt)
     };
@@ -168,7 +176,7 @@
   async function doSave() {
     let idb = false, ls = false;
     if (db) { try { await idbPut(KEY, state); idb = true; } catch (e) { console.error('IDB save failed', e); storage.lastError = String(e && e.message || e); } }
-    ls = lsSet(LS_MIRROR, JSON.stringify(state));
+    ls = lsSet(LS_MIRROR, JSON.stringify(state)); lsSet(LS_HAD, String(state.games.length));
     storage.idbOk = idb; storage.lsOk = ls;
     if (idb || ls) storage.lastSavedAt = Date.now();
     if (!idb && !ls) throw new Error('Could not write to device storage');
@@ -255,6 +263,15 @@
   /** Reminder is due when there are unsaved changes and the last backup is older than the chosen interval. */
   const backupStale = () => { const m = state.meta, r = remindDays(); return !!(r && m.lastBackupAt && m.changes > 0 && daysSince(m.lastBackupAt) >= r); };
 
+  /** What the Backup tab should nag about, or null. (Shown on the Backup page and as a dot on its tab, not on every screen.) */
+  function backupNeed() {
+    const m = state.meta, total = state.games.length + state.notes.length; if (!total) return null;
+    if (!m.lastBackupAt) return { head: 'No backup yet', text: 'Your journal only exists on this phone.' };
+    if (backupStale()) return { head: `Last backup: ${agoText(m.lastBackupAt)}`, text: `${plural(m.changes, 'change')} since then.` };
+    if (m.changes >= 10) return { head: `${plural(m.changes, 'change')} since your last backup`, text: 'A fresh backup keeps them safe.' };
+    return null;
+  }
+
   async function exportBackup() {
     const text = JSON.stringify(buildBackup(), null, 2);
     const file = new File([text], backupFilename(), { type: 'application/json' });
@@ -301,6 +318,23 @@
         <button class="btn" data-act="close-sheet">Cancel</button>
       </div>`);
     pendingImport = parsed;
+  }
+  /** Read the saved copy back from storage and compare it with what the app is showing. */
+  async function checkStorage() {
+    const rows = [];
+    const row = (l, ok, extra) => rows.push(`<div class="kv"><span>${esc(l)}</span><span class="${ok ? 'ok' : 'warn'}">${esc(extra)}</span></div>`);
+    let idbState = null;
+    if (db) { try { idbState = await idbGet(KEY); } catch (e) { /* reported below */ } }
+    const mir = readMirror(), g = state.games.length, n = state.notes.length;
+    if (db) row('Main storage (IndexedDB)', !!idbState && (idbState.games || []).length === g && (idbState.notes || []).length === n, idbState ? `${plural((idbState.games || []).length, 'game')}, ${plural((idbState.notes || []).length, 'note')}` : 'Nothing saved there');
+    else row('Main storage (IndexedDB)', false, 'Blocked by this browser');
+    row('Second copy (localStorage)', !!mir && (mir.games || []).length === g, mir ? `${plural((mir.games || []).length, 'game')}` : 'No copy found');
+    row('Shown in the app now', true, `${plural(g, 'game')}, ${plural(n, 'note')}`);
+    row('Photos saved', true, String(Object.keys(covers).length));
+    if (navigator.storage && navigator.storage.persisted) { try { const p = await navigator.storage.persisted(); row('Protected from automatic cleanup', p, p ? 'Yes' : 'Not guaranteed'); } catch (e) { /* ignore */ } }
+    const good = db && idbState && (idbState.games || []).length === g;
+    openSheet(`<h2>${good ? 'Your data is saved' : 'Check this'}</h2><p class="muted small" style="margin:6px 0 10px">${good ? 'The saved copy matches what you see.' : 'The saved copy does not match what you see, or storage is unavailable. Make a backup now.'}</p>${rows.join('')}
+      <div class="actions"><button class="btn" data-act="close-sheet">Close</button>${good ? '' : '<button class="btn primary" data-act="export">Back up now</button>'}</div>`);
   }
   /** Look inside a backup file without importing it, so you can be sure the file you saved is good. */
   function showCheck(parsed, name) {
@@ -751,14 +785,21 @@
     return normKey(expandQuery(q)).split(' ').every((w) => wordHit(e.key, e.mw, w));
   }
   /** Release info for a catalog entry: label shown to the user, whether it is still to come, and a sortable number. */
+  const dayNum = (str) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(str); return m ? Math.round(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 864e5) : 0; };
+  /** Days until a YYYY-MM-DD date (0 = today, negative = already out). */
+  const daysUntil = (d) => dayNum(d) - dayNum(todayStr());
+  const countText = (n) => (n === 0 ? 'out today' : n === 1 ? 'out tomorrow' : n < 0 ? '' : n < 61 ? `out in ${n} days` : n < 365 ? `out in ${Math.round(n / 30.4)} months` : `out in ${(Math.round(n / 36.5) / 10).toString().replace(/\.0$/, '')} years`);
+  /** Release info for a catalog entry: label shown to the user, whether it is still to come, a sortable number, and (exact dates only) days left + countdown text. */
   function relInfo(g) {
     const d = g.date, today = todayStr();
     if (!d) return { label: '', upcoming: false, sort: 0 };
     if (d === 'TBA') return { label: 'TBA', upcoming: true, sort: 99999999 };
-    if (d.length === 10) { const up = d > today; return { label: up ? 'Out ' + fmtDate(d) : fmtDate(d), upcoming: up, sort: +d.replace(/-/g, '') }; }
+    if (d.length === 10) { const days = daysUntil(d), up = d > today; return { label: up ? 'Out ' + fmtDate(d) : fmtDate(d), upcoming: up, sort: +d.replace(/-/g, ''), exact: true, days, count: up || days === 0 ? countText(days) : '' }; }
     const up = +d > +today.slice(0, 4);
     return { label: up ? 'Expected ' + d : d, upcoming: up, sort: +d * 10000 + 615 };
   }
+  /** Release info for a library game, looked up in the built-in list (null if the game isn't in it or has no date). */
+  function libRel(g) { const e = CATALOG_BY_KEY.get(normKey(g.title)); return e && e.date ? relInfo(e) : null; }
   // Short names people actually type → words used in the real titles.
   const ALIASES = { gta: 'grand theft auto', cod: 'call of duty', mw: 'modern warfare', bo: 'black ops', rdr: 'red dead redemption', re: 'resident evil', ff: 'final fantasy', dq: 'dragon quest', gow: 'god of war', tlou: 'the last of us', nfs: 'need for speed', pes: 'pro evolution soccer', mgs: 'metal gear solid', ac: 'assassin s creed', dmc: 'devil may cry', botw: 'breath of the wild', totk: 'tears of the kingdom', sf: 'street fighter', mk: 'mortal kombat', cs: 'counter strike', lol: 'league of legends', fh: 'forza horizon', tw: 'total war', sm: 'super mario', ds: 'dark souls', er: 'elden ring', hzd: 'horizon zero dawn', nba: 'nba', ufc: 'ufc' };
   function expandQuery(q) {
@@ -796,7 +837,7 @@
   }
 
   // ───────────────────────── UI plumbing ─────────────────────────
-  const ui = { libQ: '', libStatus: 'all', libPlat: 'all', libSort: 'recent', updated: false, jQ: '', jType: 'all', gType: 'all', libGenre: 'all' };
+  const ui = { libQ: '', libStatus: 'all', libPlat: 'all', libSort: 'recent', updated: false, jQ: '', jType: 'all', jTag: '', gType: 'all', gQ: '', yearSel: 0, libGenre: 'all' };
   let toastTimer = null, shareUrl = null, shareState = null;
   function toast(msg, isErr) {
     const t = $('#toast'); t.textContent = msg; t.className = 'show' + (isErr ? ' err' : '');
@@ -825,6 +866,7 @@
     const h = (location.hash || '#/').replace(/^#\/?/, '');
     const [a, b] = h.split('/');
     if (a === 'game' && b) return { name: 'game', id: decodeURIComponent(b), key: 'game/' + b };
+    if (a === 'year') return { name: 'year', year: /^\d{4}$/.test(b || '') ? +b : 0, key: 'year' };
     if (['library', 'journal', 'backup', 'stats'].includes(a)) return { name: a, key: a };
     return { name: 'home', key: 'home' };
   }
@@ -833,8 +875,23 @@
     const n = notesOf(g.id).length;
     return `<a class="card game withcover" href="#/game/${encodeURIComponent(g.id)}"><div class="gc-cover" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'thumb')}</div><div class="gc-body">
       <div class="g-top"><h3>${g.fav ? '<span class="heart" aria-label="Favorite">♥</span> ' : ''}${esc(g.title)}</h3><span class="pill st-${g.status}">${esc(statusLabel(g.status))}</span></div>
-      <div class="g-meta"><span class="plat">${esc(g.platform)}</span><span>${plural(n, 'note')}</span>${g.played ? `<span>${fmtHours(g.played)}</span>` : ''}${g.sessionAt ? '<span class="live-badge">● Playing</span>' : ''}${g.rating ? `<span class="rate-badge">★ ${g.rating}/10</span>` : ''}${g.queue ? '<span class="queue-badge">Up next</span>' : ''}</div>
-      <div class="bar"><i style="width:${g.progress}%"></i></div><div class="pct">${g.progress}%</div></div></a>`;
+      <div class="g-meta"><span class="plat">${esc(g.platform)}</span><span>${plural(n, 'note')}</span>${g.played ? `<span>${fmtHours(g.played)}</span>` : ''}${g.sessionAt ? '<span class="live-badge">● Playing</span>' : ''}${g.rating ? `<span class="rate-badge">★ ${g.rating}/10</span>` : ''}${g.queue ? '<span class="queue-badge">Up next</span>' : ''}${soonBadge(g)}</div>
+      ${g.status === 'want' && !g.progress ? '' : `<div class="bar"><i style="width:${g.progress}%"></i></div><div class="pct">${g.progress}%</div>`}</div></a>`;
+  }
+  function soonBadge(g) {
+    if (g.status !== 'want') return '';
+    const r = libRel(g); if (!r || !r.upcoming) return '';
+    return `<span class="soon-badge">${esc(r.count ? r.count[0].toUpperCase() + r.count.slice(1) : r.label)}</span>`;
+  }
+  /** Home card: Want to play / Up next games with a release date coming up (or just out). */
+  function soonList() {
+    return state.games.filter((g) => g.status === 'want').map((g) => ({ g, r: libRel(g) })).filter((x) => x.r && x.r.exact && x.r.days <= 90 && x.r.days >= -7)
+      .sort((a, b) => a.r.days - b.r.days || a.g.title.localeCompare(b.g.title));
+  }
+  function soonCard() {
+    const list = soonList(); if (!list.length) return '';
+    const row = ({ g, r }) => `<a class="soon-row" href="#/game/${encodeURIComponent(g.id)}"><div class="gc-cover xs" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'thumb')}</div><span class="sr-main"><b>${esc(g.title)}</b><small>${esc(g.platform)} · ${esc(fmtDate(CATALOG_BY_KEY.get(normKey(g.title)).date))}</small></span><span class="sr-when ${r.days <= 7 ? 'hot' : ''}">${r.days < 0 ? 'Out now' : esc(r.count[0].toUpperCase() + r.count.slice(1))}</span></a>`;
+    return `<div class="section-title">Releasing soon</div><div class="card soon-card">${list.slice(0, 5).map(row).join('')}${list.length > 5 ? `<a class="muted small" href="#/library" data-act="open-soon" style="display:block;margin-top:8px">See all ${list.length}</a>` : ''}</div>`;
   }
   function queueCard(g) {
     return `<div class="card qcard"><div class="gc-cover sm" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'thumb')}</div><a href="#/game/${encodeURIComponent(g.id)}"><h3>${esc(g.title)}</h3><div class="g-meta" style="margin:4px 0 0"><span class="plat">${esc(g.platform)}</span></div></a><button class="btn sm primary" data-act="start-game" data-id="${esc(g.id)}">${icon('next')}Start</button></div>`;
@@ -845,6 +902,7 @@
       ${showGame && g ? `<a class="n-game" href="#/game/${encodeURIComponent(g.id)}">${esc(g.title)} · ${esc(g.platform)}</a>` : ''}
       <div class="n-head"><span class="badge t-${n.type}">${esc(typeLabel(n.type))}</span><span class="n-date">${esc(fmtDate(n.date))}</span></div>
       ${n.title ? `<h4>${esc(n.title)}</h4>` : ''}
+      ${(n.tags || []).length ? `<div class="n-tags">${n.tags.map((t) => `<button type="button" class="ntag" data-act="tag-filter" data-t="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : ''}
       ${n.body ? `<div class="n-body">${esc(n.body)}</div>` : ''}
       ${actions ? `<div class="n-actions">
         <button class="btn sm" data-act="edit-note" data-id="${esc(n.id)}">${icon('edit')}Edit</button>
@@ -908,7 +966,7 @@
     } else {
       const e = rnd.cur && CATALOG_BY_KEY.get(rnd.cur);
       if (e) enqueueCovers([entryOf(e.title, e.date)]);
-      const r = e && relInfo(e), info = e ? [e.plats.join(' · '), r.label, e.tags.slice(0, 3).join(', '), e.studios[0]].filter(Boolean).join(' · ') : '';
+      const r = e && relInfo(e), info = e ? [e.plats.join(' · '), r.label, r.upcoming && r.count, e.tags.slice(0, 3).join(', '), e.studios[0]].filter(Boolean).join(' · ') : '';
       body = e ? `<div class="rnd"><div class="hero-cv rnd-cv" data-ck="${esc(e.key)}">${coverHTML({ id: '__rnd', title: e.title, platform: e.plats[0] || 'Other' }, 'full')}</div>
         <h3 class="rnd-t">${esc(e.title)}</h3><p class="muted small">${esc(info)}</p>
         <p class="muted small">Not in your library yet${poolN > 1 ? ` · 1 of ${poolN} possible` : ''}</p></div>
@@ -933,6 +991,11 @@
     const playing = state.games.filter((g) => g.status === 'playing').sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5);
     const recent = state.notes.slice().sort(byNewestNote).slice(0, 4);
     const queued = state.games.filter((g) => g.queue).sort((a, b) => a.queue - b.queue).slice(0, 5);
+    if (!state.games.length && !state.notes.length && +(lsGet(LS_HAD) || 0) > 0) {
+      return { title: LOGO + 'Save Point', fab: null, html: `<div class="card attn"><h3 class="ct">Your library is empty</h3><p class="sub">This phone had ${plural(+lsGet(LS_HAD), 'game')} saved here before. If you didn’t clear it on purpose, the browser may have wiped the app’s storage. Restore your latest backup file to get everything back.</p>
+        <div class="stack" style="margin-top:12px"><button class="btn primary block" data-act="pick-file">${icon('upload')}Restore from a backup file</button><input id="fileIn" type="file" accept=".json,application/json,text/plain" hidden>
+        <button class="btn block" data-act="start-fresh">I cleared it on purpose – start fresh</button></div></div>` };
+    }
     if (!state.games.length) {
       return { title: LOGO + 'Save Point', fab: null, html: emptyState('pad', 'Your journal is empty', 'Add the first game you’re playing, then jot down missions, boss tips, codes and builds as you go.', `<button class="btn primary" data-act="add-game">${icon('plus')}Add your first game</button>`) };
     }
@@ -945,6 +1008,7 @@
       </div>
       <div class="substats">${c('want')} want to play · ${c('paused')} paused · ${plural(state.notes.length, 'note')}${state.games.some((g) => g.fav) ? ` · <span class="heart">♥</span> ${state.games.filter((g) => g.fav).length}` : ''}${totalPlayed() ? ` · ${fmtHours(totalPlayed())} played` : ''}</div>
       <button class="btn block rnd-btn" data-act="random-game">🎲 What should I play?</button>
+      ${soonCard()}
       ${queued.length ? `<div class="section-title">Up next <a href="#/library" data-act="open-queue">See all</a></div>${queued.map(queueCard).join('')}` : ''}
       <div class="section-title">Continue playing <a href="#/library">All games</a></div>
       ${playing.length ? playing.map(gameCard).join('') : '<p class="muted card">Nothing marked “Playing” right now.</p>'}
@@ -960,11 +1024,13 @@
     if (ui.libGenre !== 'all') list = list.filter((g) => { const e = CATALOG_BY_KEY.get(normKey(g.title)); return e && hasGenre(e, ui.libGenre); });
     if (ui.libStatus === 'fav') list = list.filter((g) => g.fav);
     else if (ui.libStatus === 'queue') list = list.filter((g) => g.queue);
+    else if (ui.libStatus === 'soon') list = list.filter((g) => { const r = libRel(g); return r && r.upcoming; });
     else if (ui.libStatus !== 'all') list = list.filter((g) => g.status === ui.libStatus);
     if (ui.libPlat !== 'all') list = list.filter((g) => g.platform === ui.libPlat);
     const sorters = { recent: (a, b) => b.updatedAt - a.updatedAt, title: (a, b) => a.title.localeCompare(b.title), progress: (a, b) => b.progress - a.progress, rating: (a, b) => b.rating - a.rating || a.title.localeCompare(b.title), played: (a, b) => (b.played || 0) - (a.played || 0) || a.title.localeCompare(b.title) };
     list.sort(sorters[ui.libSort] || sorters.recent);
     if (ui.libStatus === 'queue') list.sort((a, b) => a.queue - b.queue);
+    if (ui.libStatus === 'soon') list.sort((a, b) => libRel(a).sort - libRel(b).sort || a.title.localeCompare(b.title));
     if (!list.length) return emptyState('library', state.games.length ? 'No matches' : 'No games yet', state.games.length ? 'Try a different search or filter.' : 'Tap “Game” to add one.');
     return `<p class="muted small" style="margin:8px 4px">${plural(list.length, 'game')}</p>` + list.map(gameCard).join('');
   }
@@ -972,7 +1038,7 @@
     const plats = [...new Set(state.games.map((g) => g.platform))].sort();
     const gcount = {}; state.games.forEach((g) => { const e = CATALOG_BY_KEY.get(normKey(g.title)); if (e) MAIN_GENRES.forEach((n) => { if (hasGenre(e, n)) gcount[n] = (gcount[n] || 0) + 1; }); });
     const libGenres = MAIN_GENRES.filter((n) => gcount[n]).map((n) => [n, gcount[n]]);
-    const chips = [{ id: 'all', label: 'All' }, ...STATUSES, { id: 'fav', label: '♥ Favorites' }, { id: 'queue', label: 'Up next' }].map((s) => `<button class="chip ${ui.libStatus === s.id ? 'on' : ''}" data-act="set-ui" data-k="libStatus" data-v="${s.id}">${esc(s.label)}</button>`).join('');
+    const chips = [{ id: 'all', label: 'All' }, ...STATUSES, { id: 'fav', label: '♥ Favorites' }, { id: 'queue', label: 'Up next' }, ...(state.games.some((g) => { const r = libRel(g); return r && r.upcoming; }) ? [{ id: 'soon', label: '📅 Upcoming' }] : [])].map((s) => `<button class="chip ${ui.libStatus === s.id ? 'on' : ''}" data-act="set-ui" data-k="libStatus" data-v="${s.id}">${esc(s.label)}</button>`).join('');
     return {
       title: 'Library', fab: { label: 'Game', act: 'add-game' }, html: `
       <input type="search" placeholder="Search games, genres, studios…" value="${esc(ui.libQ)}" data-bind="libQ" aria-label="Search games, genres or studios" enterkeyhint="search">
@@ -987,12 +1053,18 @@
     };
   }
 
+  /** Does a note match a typed search? Every word must appear in the title, text, tags or game name. */
+  function noteMatches(n, q) {
+    const g = gameById(n.gameId), hay = [n.title, n.body, (n.tags || []).join(' '), g ? g.title : ''].join(' \n ').toLowerCase();
+    return q.toLowerCase().split(/\s+/).filter(Boolean).every((w) => hay.includes(w.replace(/^#/, '')));
+  }
   function journalList() {
     let list = state.notes.slice().sort(byNewestNote);
-    const q = ui.jQ.trim().toLowerCase();
+    const q = ui.jQ.trim();
     if (ui.jType !== 'all') list = list.filter((n) => n.type === ui.jType);
-    if (q) list = list.filter((n) => { const g = gameById(n.gameId); return n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q) || (g && g.title.toLowerCase().includes(q)); });
-    if (!list.length) return emptyState('journal', state.notes.length ? 'No matching notes' : 'No notes yet', state.notes.length ? 'Try a different search or type.' : 'Open a game and tap “Note” to start your journal.');
+    if (ui.jTag) list = list.filter((n) => (n.tags || []).includes(ui.jTag));
+    if (q) list = list.filter((n) => noteMatches(n, q));
+    if (!list.length) return emptyState('journal', state.notes.length ? 'No matching notes' : 'No notes yet', state.notes.length ? 'Try a different search, tag or type.' : 'Open a game and tap “Note” to start your journal.');
     let html = `<p class="muted small" style="margin:8px 4px">${plural(list.length, 'note')}</p>`, last = '';
     list.forEach((n) => {
       const ym = n.date.slice(0, 7);
@@ -1001,9 +1073,15 @@
     });
     return html;
   }
+  /** All tags in use, most used first. */
+  function tagCounts(notes) {
+    const m = new Map(); (notes || state.notes).forEach((n) => (n.tags || []).forEach((t) => m.set(t, (m.get(t) || 0) + 1)));
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+  }
   function viewJournal() {
     const chips = [{ id: 'all', label: 'All' }, ...NOTE_TYPES].map((t) => `<button class="chip ${ui.jType === t.id ? 'on' : ''}" data-act="set-ui" data-k="jType" data-v="${t.id}">${esc(t.label)}</button>`).join('');
-    return { title: 'Journal', fab: null, html: `<input type="search" placeholder="Search all notes…" value="${esc(ui.jQ)}" data-bind="jQ" aria-label="Search notes" enterkeyhint="search"><div class="chips" style="margin-top:10px">${chips}</div><div id="listBox">${journalList()}</div>` };
+    const tc = tagCounts().sort((x, y) => (y[0] === ui.jTag) - (x[0] === ui.jTag)), tagRow = tc.length ? `<div class="chips tagrow" aria-label="Tags">${tc.slice(0, 20).map(([t, c]) => `<button class="chip tg ${ui.jTag === t ? 'on' : ''}" data-act="tag-filter" data-t="${esc(t)}" ${ui.jTag === t ? 'data-off="1"' : ''}>#${esc(t)} ${c}</button>`).join('')}</div>` : '';
+    return { title: 'Journal', fab: null, html: `<input type="search" placeholder="Search notes, tags, games…" value="${esc(ui.jQ)}" data-bind="jQ" aria-label="Search notes" enterkeyhint="search"><div class="chips" style="margin-top:10px">${chips}</div>${tagRow}<div id="listBox">${journalList()}</div>` };
   }
 
   /** Genre and studio chips for a game from the built-in list; tapping one searches your library for it. */
@@ -1012,11 +1090,21 @@
     const chip = (t) => `<button type="button" class="mchip" data-act="search-lib" data-q="${esc(t)}">${esc(t)}</button>`;
     return `<div class="mchips">${e.tags.slice(0, 4).map(chip).join('')}${e.studios.slice(0, 2).map((x) => chip(x).replace('class="mchip"', 'class="mchip studio"')).join('')}</div>`;
   }
+  function relLine(g) {
+    const r = libRel(g); if (!r || !r.upcoming) return '';
+    return `<p class="rel-line">📅 ${esc(r.label)}${r.count ? ' · ' + esc(r.count) : ''}</p>`;
+  }
+  function gameNotesHTML(g) {
+    const all = notesOf(g.id).sort(byNewestNote);
+    let list = ui.gType === 'all' ? all : all.filter((n) => n.type === ui.gType);
+    if (all.length >= 6 && ui.gQ.trim()) list = list.filter((n) => noteMatches(n, ui.gQ));
+    if (!list.length) return all.length ? emptyState('journal', 'No matching notes', 'Try a different search or type.') : emptyState('journal', 'No notes yet', 'Missions, boss tips, codes, builds, locations… tap “Note”.');
+    return list.map((n) => noteCard(n, { actions: true })).join('');
+  }
   function viewGame(id) {
     const g = gameById(id);
     if (!g) return { title: 'Not found', back: '#/library', fab: null, html: emptyState('library', 'Game not found', 'It may have been deleted.', '<a class="btn primary" href="#/library">Back to library</a>') };
     const all = notesOf(g.id).sort(byNewestNote);
-    const list = ui.gType === 'all' ? all : all.filter((n) => n.type === ui.gType);
     const counts = (t) => all.filter((n) => n.type === t).length;
     const chips = [{ id: 'all', label: `All ${all.length}` }, ...NOTE_TYPES.filter((t) => counts(t.id)).map((t) => ({ id: t.id, label: `${t.label} ${counts(t.id)}` }))]
       .map((t) => `<button class="chip ${ui.gType === t.id ? 'on' : ''}" data-act="set-ui" data-k="gType" data-v="${t.id}">${esc(t.label)}</button>`).join('');
@@ -1031,11 +1119,13 @@
           <input id="coverIn" type="file" accept="image/*" data-cover="${esc(g.id)}" hidden>
         </div></div>
         ${gameMetaChips(g)}
+        ${relLine(g)}
         <div class="seg" role="group" aria-label="Status">${STATUSES.map((s) => `<button class="${g.status === s.id ? 'on' : ''}" data-act="quick-status" data-id="${g.id}" data-v="${s.id}">${esc(s.label)}</button>`).join('')}</div>
         <div class="row tog">
           <button class="btn ${g.fav ? 'on fav' : ''}" data-act="toggle-fav" data-id="${esc(g.id)}" aria-pressed="${g.fav}">${icon('heart')}${g.fav ? 'Favorite' : 'Add to favorites'}</button>
           ${g.status === 'playing' || g.status === 'finished' ? '' : `<button class="btn ${g.queue ? 'on' : ''}" data-act="toggle-queue" data-id="${esc(g.id)}" aria-pressed="${!!g.queue}">${icon('next')}${g.queue ? 'In Up next' : 'Up next'}</button>`}
         </div>
+        ${g.status === 'want' && !(g.rating || g.progress || g.played || g.startedAt || g.finishedAt) ? `<div class="notstarted"><p><b>Not started yet.</b> Rating, completion and hours show up once you start playing.</p><button class="btn primary block" data-act="start-game" data-id="${esc(g.id)}">${icon('next')}Start playing</button><p class="muted small">Already finished it? Tap <b>Finished</b> above and you can rate it.</p></div>` : `
         <label class="f">YOUR RATING <b class="rate-val">${g.rating ? g.rating + ' / 10' : 'not rated'}</b></label>
         <div class="rate" role="group" aria-label="Rating out of 10">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => `<button class="${g.rating === v ? 'on' : ''}" data-act="set-rating" data-id="${esc(g.id)}" data-v="${v}" aria-pressed="${g.rating === v}">${v}</button>`).join('')}</div>
         <label class="f" for="prog">COMPLETION</label>
@@ -1052,11 +1142,13 @@
           <div class="dwrap"><input id="dEnd" type="date" data-date="finishedAt" data-id="${esc(g.id)}" value="${esc(g.finishedAt)}">${g.finishedAt ? `<button class="x" data-act="clear-date" data-k="finishedAt" data-id="${esc(g.id)}" aria-label="Clear finish date">✕</button>` : ''}</div>
         </div>
         ${g.startedAt && g.finishedAt && g.finishedAt >= g.startedAt ? `<p class="muted small" style="margin-top:8px">Finished in ${plural(daysBetween(g.startedAt, g.finishedAt) + 1, 'day')}.</p>` : ''}
+        `}
         <div class="row" style="margin-top:14px"><button class="btn" data-act="edit-game" data-id="${esc(g.id)}">${icon('edit')}Edit</button><button class="btn" data-act="share-card" data-id="${esc(g.id)}">${icon('share')}Share</button><button class="btn danger" data-act="del-game" data-id="${esc(g.id)}">${icon('trash')}Delete</button></div>
       </div>
       <div class="section-title">Notes</div>
+      ${all.length >= 6 ? `<input type="search" placeholder="Search this game’s notes…" value="${esc(ui.gQ)}" data-bind="gQ" aria-label="Search this game’s notes" enterkeyhint="search" style="margin-bottom:10px">` : ''}
       ${all.length ? `<div class="chips">${chips}</div>` : ''}
-      ${list.length ? list.map((n) => noteCard(n, { actions: true })).join('') : emptyState('journal', 'No notes yet', 'Missions, boss tips, codes, builds, locations… tap “Note”.')}`
+      <div id="listBox">${gameNotesHTML(g)}</div>`
     };
   }
 
@@ -1109,6 +1201,7 @@
         <div class="stat accent"><b>${rated.length ? avg.toFixed(1) : '–'}</b><span>Avg rating</span></div>
       </div>
       <div class="substats">${rated.length ? plural(rated.length, 'rated game') : 'No ratings yet'} · ${plural(state.notes.length, 'note')}${avgDays ? ` · finish in ~${plural(avgDays, 'day')}` : ''}</div>
+      <a class="card yr-link" href="#/year"><b>📅 Your year in review</b><span class="muted small">Finished, started, top rated, hours and more →</span></a>
       ${hoursCard()}
       ${genreCard()}
       <div class="card"><h3 class="ct">By status</h3>${stCounts.map(([l, n, id]) => hbar(l, n, stMax, 'st-' + id)).join('')}</div>
@@ -1190,6 +1283,85 @@
     shareUrl = URL.createObjectURL(blob);
     const sh = $('#sheet .sheet'); sh.insertAdjacentHTML('beforeend', `<img class="share-img" src="${shareUrl}" alt="Share card for ${esc(g.title)}"><div class="actions"><button class="btn" data-act="close-sheet">Close</button><button class="btn primary" data-act="do-share-card">${icon('share')}Share</button></div>`);
   }
+
+  // ───────────────────────── year in review ─────────────────────────
+  /** Everything for one calendar year, worked out from dates already stored on games and notes. */
+  function yearData(y) {
+    const ys = String(y), inY = (d) => typeof d === 'string' && d.slice(0, 4) === ys, gs = state.games;
+    const finished = gs.filter((g) => g.status === 'finished' && inY(g.finishedAt)).sort((a, b) => (a.finishedAt < b.finishedAt ? -1 : a.finishedAt > b.finishedAt ? 1 : 0));
+    const started = gs.filter((g) => inY(g.startedAt)), added = gs.filter((g) => inY(dateStr(new Date(g.createdAt))));
+    const notes = state.notes.filter((n) => inY(n.date));
+    const mins = new Map(); let minutes = 0;
+    gs.forEach((g) => (g.plays || []).forEach((p) => { if (inY(p.d)) { minutes += p.m; mins.set(g.id, (mins.get(g.id) || 0) + p.m); } }));
+    const mostPlayed = [...mins.entries()].map(([id, m]) => ({ g: gameById(id), m })).filter((x) => x.g).sort((a, b) => b.m - a.m || a.g.title.localeCompare(b.g.title)).slice(0, 3);
+    const rated = finished.filter((g) => g.rating), avg = rated.length ? rated.reduce((a, g) => a + g.rating, 0) / rated.length : 0;
+    const top = rated.slice().sort((a, b) => b.rating - a.rating || a.title.localeCompare(b.title)).slice(0, 5);
+    const perMonth = MONTHS.map((l, i) => [l, finished.filter((g) => +g.finishedAt.slice(5, 7) === i + 1).length]);
+    const best = perMonth.reduce((a, b) => (b[1] > a[1] ? b : a), ['', 0]);
+    const count = (arr) => { const m = new Map(); arr.forEach((k) => m.set(k, (m.get(k) || 0) + 1)); return [...m.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)); };
+    const plats = count(finished.map((g) => g.platform)).slice(0, 4);
+    const genres = count([].concat(...finished.map((g) => { const e = CATALOG_BY_KEY.get(normKey(g.title)); return e ? MAIN_GENRES.filter((n) => hasGenre(e, n)).slice(0, 2) : []; }))).slice(0, 4);
+    const tags = tagCounts(notes).slice(0, 5);
+    return { y, finished, started, added, notes, minutes, mostPlayed, rated, avg, top, perMonth, best, plats, genres, tags, empty: !finished.length && !started.length && !added.length && !notes.length && !minutes };
+  }
+  function yearsWithData() {
+    const set = new Set([new Date().getFullYear()]), add = (d) => { if (typeof d === 'string' && /^\d{4}/.test(d)) set.add(+d.slice(0, 4)); };
+    state.games.forEach((g) => { add(g.finishedAt); add(g.startedAt); add(dateStr(new Date(g.createdAt))); (g.plays || []).forEach((p) => add(p.d)); });
+    state.notes.forEach((n) => add(n.date));
+    return [...set].filter((y) => y >= 1970 && y <= 2100).sort((a, b) => b - a);
+  }
+  function viewYear(want) {
+    const years = yearsWithData(), y = years.includes(want) ? want : years[0], d = yearData(y);
+    const chips = years.length > 1 ? `<div class="chips">${years.map((v) => `<a class="chip ${v === y ? 'on' : ''}" href="#/year/${v}">${v}</a>`).join('')}</div>` : '';
+    const stat = (n, l, cls) => `<div class="stat ${cls || ''}"><b>${n}</b><span>${l}</span></div>`;
+    const hbar = (label, n, max, cls) => `<div class="hb"><span class="hb-l">${esc(label)}</span><div class="hb-t"><i class="${cls || ''}" style="width:${max ? Math.max(n ? 4 : 0, Math.round((n / max) * 100)) : 0}%"></i></div><span class="hb-n">${n}</span></div>`;
+    if (d.empty) return { title: y + ' in review', back: '#/stats', fab: null, html: `${chips}${emptyState('stats', 'Nothing in ' + y + ' yet', 'Games you add, start or finish, and notes you write, show up here.')}` };
+    const mMax = Math.max(1, ...d.perMonth.map((x) => x[1]));
+    const row = (g, i, badge) => `<a class="toprow" href="#/game/${encodeURIComponent(g.id)}"><span class="rk">${i + 1}</span><span class="tt">${esc(g.title)}</span>${badge}</a>`;
+    return { title: y + ' in review', back: '#/stats', fab: null, html: `
+      ${chips}
+      <div class="stats">${stat(d.finished.length, 'Finished', 'good')}${stat(d.started.length, 'Started')}${stat(d.added.length, 'Added', 'accent')}</div>
+      <div class="substats">${plural(d.notes.length, 'note')} written${d.minutes ? ` · ${fmtHours(d.minutes)} logged` : ''}${d.rated.length ? ` · avg rating ${d.avg.toFixed(1)}` : ''}</div>
+      ${d.finished.length ? `<div class="card"><h3 class="ct">Finished per month</h3>${d.perMonth.map(([l, n]) => hbar(l, n, mMax, 'st-finished')).join('')}${d.best[1] > 1 ? `<p class="sub" style="margin-top:8px">Busiest month: ${esc(d.best[0])} (${d.best[1]} games).</p>` : ''}</div>` : '<div class="card"><p class="sub">No finished games with a finish date in ' + y + ' yet. Mark a game Finished and it shows up here.</p></div>'}
+      ${d.top.length ? `<div class="card"><h3 class="ct">Top rated finishes</h3>${d.top.map((g, i) => row(g, i, `<span class="rate-badge">★ ${g.rating}</span>`)).join('')}</div>` : ''}
+      ${d.finished.length ? `<div class="card"><h3 class="ct">Everything you finished</h3>${d.finished.map((g, i) => row(g, i, `<span class="muted small">${esc(fmtDate(g.finishedAt))}</span>`)).join('')}</div>` : ''}
+      ${d.mostPlayed.length ? `<div class="card"><h3 class="ct">Most played</h3>${d.mostPlayed.map((x, i) => row(x.g, i, `<span class="rate-badge">${fmtHours(x.m)}</span>`)).join('')}<p class="sub" style="margin-top:8px">Counts only hours logged in the app (sessions and added hours).</p></div>` : ''}
+      ${d.plats.length || d.genres.length ? `<div class="card"><h3 class="ct">What you finished</h3>${d.plats.length ? `<p class="sub">Platforms: ${d.plats.map(([k, n]) => `${esc(k)} ${n}`).join(' · ')}</p>` : ''}${d.genres.length ? `<p class="sub" style="margin-top:6px">Genres: ${d.genres.map(([k, n]) => `${esc(k)} ${n}`).join(' · ')}</p>` : ''}</div>` : ''}
+      ${d.tags.length ? `<div class="card"><h3 class="ct">Most-used note tags</h3><div class="mchips">${d.tags.map(([t, c]) => `<button type="button" class="mchip" data-act="tag-filter" data-t="${esc(t)}">#${esc(t)} ${c}</button>`).join('')}</div></div>` : ''}
+      <button class="btn primary block" data-act="year-card" data-y="${y}">${icon('share')}Share ${y} card</button>
+      <p class="muted small" style="margin:10px 4px">Built only from dates saved on your games and notes. Games finished without a finish date aren't counted.</p>` };
+  }
+  async function makeYearCard(d) {
+    const W = 1080, H = 1350, c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'), pad = 100;
+    const bg = x.createLinearGradient(0, 0, W, H); bg.addColorStop(0, '#060a13'); bg.addColorStop(1, '#10224a'); x.fillStyle = bg; x.fillRect(0, 0, W, H);
+    const glow = x.createRadialGradient(W - 120, 160, 10, W - 120, 160, 700); glow.addColorStop(0, 'rgba(34,211,238,.32)'); glow.addColorStop(1, 'rgba(34,211,238,0)'); x.fillStyle = glow; x.fillRect(0, 0, W, H);
+    x.strokeStyle = 'rgba(34,211,238,.35)'; x.lineWidth = 3; rrect(x, 40, 40, W - 80, H - 80, 48); x.stroke();
+    x.textBaseline = 'alphabetic'; x.fillStyle = '#8aa0c4'; x.font = `800 38px ${FONT}`; if ('letterSpacing' in x) x.letterSpacing = '6px'; x.fillText('SAVE POINT', pad, 160); if ('letterSpacing' in x) x.letterSpacing = '0px';
+    x.fillStyle = '#e8f0ff'; x.font = `900 150px ${FONT}`; x.fillText(String(d.y), pad, 330);
+    x.fillStyle = '#22d3ee'; x.font = `800 52px ${FONT}`; x.fillText('in games', pad, 405);
+    const big = [[d.finished.length, 'FINISHED', '#34d399'], [d.started.length, 'STARTED', '#22d3ee'], [d.notes.length, 'NOTES', '#fbbf24']];
+    big.forEach(([n, l, col], i) => { const bx = pad + i * 300; x.fillStyle = col; x.font = `900 120px ${FONT}`; x.fillText(String(n), bx, 600); x.fillStyle = '#8aa0c4'; x.font = `800 32px ${FONT}`; x.fillText(l, bx, 650); });
+    let y = 760; x.fillStyle = '#8aa0c4'; x.font = `800 34px ${FONT}`;
+    const list = d.top.length ? d.top : d.finished.slice(0, 5);
+    if (list.length) { x.fillText(d.top.length ? 'TOP RATED' : 'FINISHED', pad, y); y += 30; }
+    list.slice(0, 5).forEach((g, i) => {
+      y += 78; x.fillStyle = '#5b7099'; x.font = `800 44px ${FONT}`; x.fillText(String(i + 1), pad, y);
+      x.fillStyle = '#e8f0ff'; x.font = `700 48px ${FONT}`; const t = wrapText(x, g.title, W - pad * 2 - 230, 1)[0]; x.fillText(t, pad + 70, y);
+      if (g.rating) { x.fillStyle = '#fbbf24'; x.textAlign = 'right'; x.font = `800 48px ${FONT}`; x.fillText('★ ' + g.rating, W - pad, y); x.textAlign = 'left'; }
+    });
+    const bits = []; if (d.minutes) bits.push(fmtHours(d.minutes) + ' logged'); if (d.rated.length) bits.push('avg rating ' + d.avg.toFixed(1));
+    if (bits.length) { x.fillStyle = '#b8c8e6'; x.font = `600 38px ${FONT}`; x.fillText(bits.join('  ·  '), pad, 1160); }
+    x.fillStyle = '#5b7099'; x.font = `600 32px ${FONT}`; x.fillText('My gaming journal · Save Point', pad, H - 96);
+    return new Promise((res) => { if (c.toBlob) c.toBlob((b) => res(b), 'image/png'); else res(null); });
+  }
+  async function openYearCard(y) {
+    let blob = null; try { blob = await makeYearCard(yearData(y)); } catch (e) { /* handled below */ }
+    if (!blob) return toast('Could not make the card on this browser', true);
+    shareState = { blob, name: `save-point-${y}.png`, title: `My ${y} in games` };
+    openSheet(`<h2>${y} card</h2><p class="muted small">Tap Share, then choose “Save Image” or send it to a friend.</p>`, '');
+    shareUrl = URL.createObjectURL(blob);
+    const sh = $('#sheet .sheet'); sh.insertAdjacentHTML('beforeend', `<img class="share-img" src="${shareUrl}" alt="Your ${y} in games card"><div class="actions"><button class="btn" data-act="close-sheet">Close</button><button class="btn primary" data-act="do-share-card">${icon('share')}Share</button></div>`);
+  }
   async function doShareCard() {
     if (!shareState) return; const { blob, name, title } = shareState;
     const file = new File([blob], name, { type: 'image/png' });
@@ -1208,6 +1380,7 @@
     const pers = storage.persisted === true ? '<span class="ok">Yes</span>' : storage.persisted === false ? '<span class="warn">Not guaranteed</span>' : 'Unknown';
     return {
       title: 'Backup', fab: null, html: `
+      ${backupNeed() ? `<div class="card attn"><h3 class="ct">${esc(backupNeed().head)}</h3><p class="sub">${esc(backupNeed().text)}</p><button class="btn primary block" data-act="export" style="margin-top:10px">${icon('share')}Back up now</button></div>` : ''}
       <div class="card">
         <h3 class="ct">Back up your journal</h3>
         <p class="sub">Your data exists only on this phone. A backup file is your protection against clearing Safari data, deleting the app, or changing phones.</p>
@@ -1239,6 +1412,7 @@
         <div class="kv"><span>Last saved to storage</span>${saved}</div>
         <div class="kv"><span>Storage protected from cleanup</span>${pers}</div>
         <div class="kv"><span>Offline app files</span><span id="offlineStatus" class="muted">Checking…</span></div>
+        <button class="btn sm" data-act="check-storage" style="margin:8px 0">Check that my data is saved</button>
         <div class="kv"><span>Running as installed app</span><span>${isStandalone() ? '<span class="ok">Yes</span>' : '<span class="warn">No – open from Home Screen icon</span>'}</span></div>
       </div>
       <div class="card">
@@ -1293,7 +1467,7 @@
   function render() {
     const r = route();
     let v;
-    if (r.name === 'game') v = viewGame(r.id); else v = { home: viewHome, library: viewLibrary, stats: viewStats, journal: viewJournal, backup: viewBackup }[r.name]();
+    if (r.name === 'game') v = viewGame(r.id); else if (r.name === 'year') v = viewYear(r.year); else v = { home: viewHome, library: viewLibrary, stats: viewStats, journal: viewJournal, backup: viewBackup }[r.name]();
     $('#title').innerHTML = v.title;
     const back = $('#backBtn');
     if (v.back) { back.hidden = false; back.innerHTML = icon('back'); back.dataset.href = v.back; } else back.hidden = true;
@@ -1301,17 +1475,13 @@
     const fab = $('#fab');
     if (v.fab) { fab.hidden = false; fab.innerHTML = `${icon('plus')}${esc(v.fab.label)}`; fab.dataset.act = v.fab.act; fab.dataset.id = v.fab.id || ''; } else fab.hidden = true;
     $('#tabs').innerHTML = `<div class="inner">${[['home', 'Home', '#/'], ['library', 'Library', '#/library'], ['stats', 'Stats', '#/stats'], ['journal', 'Journal', '#/journal'], ['backup', 'Backup', '#/backup']]
-      .map(([k, l, h]) => `<a href="${h}" class="${(r.name === k || (r.name === 'game' && k === 'library')) ? 'active' : ''}" ${r.name === k ? 'aria-current="page"' : ''}>${icon(k === 'home' ? 'home' : k)}${l}</a>`).join('')}</div>`;
+      .map(([k, l, h]) => `<a href="${h}" class="${(r.name === k || (r.name === 'game' && k === 'library') || (r.name === 'year' && k === 'stats')) ? 'active' : ''}" ${r.name === k ? 'aria-current="page"' : ''}>${icon(k === 'home' ? 'home' : k)}${k === 'backup' && backupNeed() ? '<i class="tab-dot" role="img" aria-label="Backup needed"></i>' : ''}${l}</a>`).join('')}</div>`;
     if (r.key !== lastRouteKey) { window.scrollTo(0, 0); lastRouteKey = r.key; }
     if (r.name === 'backup') afterBackupView();
   }
   function renderBanners() {
     const el = $('#banners'); const out = [];
-    const total = state.games.length + state.notes.length;
     if (storage.mode !== 'indexeddb') out.push(`<div class="banner err"><p><b>Storage warning:</b> this browser blocked IndexedDB, so Save Point is using a smaller fallback. Export backups often.</p></div>`);
-    if (total && !state.meta.lastBackupAt) out.push(`<div class="banner"><p><b>No backup yet.</b> Your journal only exists on this phone.</p><button class="btn sm" data-act="export">Back up</button></div>`);
-    else if (total && backupStale()) out.push(`<div class="banner"><p><b>Last backup: ${esc(agoText(state.meta.lastBackupAt))}.</b> ${plural(state.meta.changes, 'change')} since then.</p><button class="btn sm" data-act="export">Back up</button></div>`);
-    else if (total && state.meta.changes >= 10) out.push(`<div class="banner"><p><b>${plural(state.meta.changes, 'change')}</b> since your last backup.</p><button class="btn sm" data-act="export">Back up</button></div>`);
     if (ui.updated) out.unshift(`<div class="banner"><p><b>Save Point was updated.</b> Reload to use the new version.</p><button class="btn sm" data-act="reload">Reload</button></div>`);
     el.innerHTML = out.join('');
   }
@@ -1377,7 +1547,7 @@
     const searching = normKey(multi.q).length >= 2;
     let html = slice.map((g) => {
       const on = multi.sel.has(g.key), inLib = lib.has(g.key), r = relInfo(g);
-      const meta = [g.plats.join(' · '), r.label].filter(Boolean).join(' · '), meta2 = [g.tags.slice(0, 3).join(', '), g.studios[0]].filter(Boolean).join(' · ');
+      const meta = [g.plats.join(' · '), r.label, r.upcoming && r.count].filter(Boolean).join(' · '), meta2 = [g.tags.slice(0, 3).join(', '), g.studios[0]].filter(Boolean).join(' · ');
       return `<button type="button" class="pick ${on ? 'on' : ''}" data-act="toggle-pick" data-k="${esc(g.key)}" ${inLib ? 'disabled' : ''} aria-pressed="${on}"><span class="tick">${CHECK}</span><span class="gc-cover xs" data-ck="${esc(g.key)}">${thumbFor(g.title)}</span><span class="pk-main"><b>${esc(g.title)}</b><small>${esc(meta) || '&nbsp;'}</small>${meta2 ? `<small class="pk-tags">${esc(meta2)}</small>` : ''}</span>${inLib ? '<em>In library</em>' : r.upcoming ? '<em class="soon">Soon</em>' : ''}</button>`;
     }).join('');
     if (all.length > slice.length) html += `<button type="button" class="btn block" data-act="pick-more" style="margin:8px 0">Show more (${all.length - slice.length} left)</button>`;
@@ -1447,20 +1617,23 @@
         <input id="nDate" name="date" type="date" required value="${esc(n.date || todayStr())}">
         <label class="f" for="nTitle">TITLE (OPTIONAL)</label>
         <input id="nTitle" name="title" type="text" maxlength="200" value="${esc(n.title || '')}" placeholder="e.g. Safe in the basement">
+        <label class="f" for="nTags">TAGS (OPTIONAL, SEPARATED BY COMMAS)</label>
+        <input id="nTags" name="tags" type="text" maxlength="200" value="${esc((n.tags || []).join(', '))}" placeholder="e.g. boss, missable, secret" autocapitalize="none" autocorrect="off">
+        ${tagCounts().length ? `<div class="mchips tagsugg">${tagCounts().slice(0, 8).map(([t]) => `<button type="button" class="mchip" data-act="tag-add" data-t="${esc(t)}">#${esc(t)}</button>`).join('')}</div>` : ''}
         <label class="f" for="nBody">NOTE</label>
         <textarea id="nBody" name="body" maxlength="200000" placeholder="What do you want to remember?">${esc(n.body || '')}</textarea>
         ${draft ? '<p class="draft-note">Restored your unsaved draft.</p>' : ''}
         <div class="actions"><button type="button" class="btn" data-act="close-sheet">Cancel</button><button type="submit" class="btn primary">Save note</button></div>
       </form>`);
     const form = $('#noteForm', sh), F = form.elements;
-    if (!isEdit) form.addEventListener('input', () => { lsSet(draftKey, JSON.stringify({ type: F.type.value, date: F.date.value, title: F.title.value, body: F.body.value })); });
+    if (!isEdit) form.addEventListener('input', () => { lsSet(draftKey, JSON.stringify({ type: F.type.value, date: F.date.value, title: F.title.value, tags: parseTags(F.tags.value), body: F.body.value })); });
     form.addEventListener('submit', (e) => {
       e.preventDefault();
-      const type = F.type.value, date = F.date.value || todayStr(), title = F.title.value.trim(), body = F.body.value;
+      const type = F.type.value, date = F.date.value || todayStr(), title = F.title.value.trim(), body = F.body.value, tags = parseTags(F.tags.value);
       if (!title && !body.trim()) { F.body.focus(); return toast('Write something first'); }
       closeSheet();
-      if (isEdit) mutate((s) => { const x = s.notes.find((q) => q.id === note.id); Object.assign(x, { type, date, title, body, updatedAt: Date.now() }); gameById2(s, gameId).updatedAt = Date.now(); }, 'Note updated');
-      else mutate((s) => { s.notes.push({ id: uid(), gameId, type, date, title, body, createdAt: Date.now(), updatedAt: Date.now() }); gameById2(s, gameId).updatedAt = Date.now(); }, 'Note saved').then(() => { if (storage.idbOk || storage.lsOk) lsDel(draftKey); });
+      if (isEdit) mutate((s) => { const x = s.notes.find((q) => q.id === note.id); Object.assign(x, { type, date, title, body, tags, updatedAt: Date.now() }); gameById2(s, gameId).updatedAt = Date.now(); }, 'Note updated');
+      else mutate((s) => { s.notes.push({ id: uid(), gameId, type, date, title, body, tags, createdAt: Date.now(), updatedAt: Date.now() }); gameById2(s, gameId).updatedAt = Date.now(); }, 'Note saved').then(() => { if (storage.idbOk || storage.lsOk) lsDel(draftKey); });
     });
     if (!isEdit && !draft) setTimeout(() => F.body.focus(), 300);
   }
@@ -1505,8 +1678,10 @@
     'do-edit-hours': (t) => { const id = t.dataset.id, h = parseFloat(($('#hrIn') || {}).value); if (!(h >= 0) || h > 10000) return toast('Enter a number of hours, like 12.5', true); closeSheet(); mutate((s) => { const g = gameById2(s, id); g.played = Math.round(h * 60); g.updatedAt = Date.now(); }, 'Total hours updated'); },
     'start-game': (t) => { const id = t.dataset.id; mutate((s) => { applyStatus(gameById2(s, id), 'playing'); }, 'Started – have fun!'); },
     'open-queue': () => { ui.libStatus = 'queue'; },
+    'open-soon': () => { ui.libStatus = 'soon'; },
     'clear-date': (t) => { const id = t.dataset.id, k = t.dataset.k; mutate((s) => { const g = gameById2(s, id); g[k] = ''; g.updatedAt = Date.now(); }); },
     'share-card': (t) => openShareCard(t.dataset.id),
+    'year-card': (t) => openYearCard(+t.dataset.y),
     'do-share-card': () => doShareCard(),
     'find-cover': (t) => { const g = gameById(t.dataset.id); if (g) startReview([rvItem(g)]); },
     'fix-covers': () => startFixJob(),
@@ -1548,8 +1723,12 @@
     'copy-note': async (t) => { const n = state.notes.find((x) => x.id === t.dataset.id); if (!n) return; try { await navigator.clipboard.writeText(n.body); toast('Copied'); } catch (e) { toast('Copy was blocked by the browser', true); } },
     'quick-status': (t) => { const id = t.dataset.id, v = t.dataset.v; mutate((s) => { applyStatus(gameById2(s, id), v); }); },
     'set-ui': (t) => { ui[t.dataset.k] = t.dataset.v; render(); },
+    'tag-filter': (t) => { const on = t.dataset.off === '1'; ui.jTag = on ? '' : t.dataset.t; ui.jQ = ''; ui.jType = 'all'; if (route().name === 'journal') render(); else location.hash = '#/journal'; },
+    'tag-add': (t) => { const f = $('#nTags'); if (!f) return; const cur = parseTags(f.value); if (!cur.includes(t.dataset.t)) cur.push(t.dataset.t); f.value = cur.join(', '); f.dispatchEvent(new Event('input', { bubbles: true })); },
     'export': () => exportBackup(),
     'copy-backup': () => copyBackup(),
+    'check-storage': () => checkStorage(),
+    'start-fresh': () => { lsSet(LS_HAD, '0'); render(); },
     'check-backup': () => { const f = $('#chkIn'); if (f) f.click(); },
     'pick-file': () => { const f = $('#fileIn'); if (f) f.click(); },
     'paste-import': () => {
@@ -1579,7 +1758,7 @@
     const t = e.target;
     if (t.dataset && t.dataset.progress) { const o = $('#progOut'); if (o) o.textContent = t.value + '%'; return; }
     if (t.dataset && t.dataset.multiq) { multi.q = t.value; multi.shown = 60; refreshMulti(); return; }
-    if (t.dataset && t.dataset.bind) { ui[t.dataset.bind] = t.value; const lb = $('#listBox'); if (lb && t.type === 'search') lb.innerHTML = route().name === 'journal' ? journalList() : libraryList(); }
+    if (t.dataset && t.dataset.bind) { ui[t.dataset.bind] = t.value; const lb = $('#listBox'); if (lb && t.type === 'search') lb.innerHTML = route().name === 'journal' ? journalList() : route().name === 'game' ? gameNotesHTML(gameById(route().id)) : libraryList(); }
   });
   document.addEventListener('change', (e) => {
     const t = e.target;
@@ -1590,7 +1769,7 @@
     if (t.dataset && t.dataset.pickopt) { if (t.dataset.pickopt === 'plat') { multi.pref = t.value; lsSet(LS_PREF, t.value); } else multi.status = t.value; return; }
     if (t.dataset && t.dataset.bind && t.tagName === 'SELECT') { ui[t.dataset.bind] = t.value; const lb = $('#listBox'); if (lb) lb.innerHTML = libraryList(); return; }
     if (t.dataset && t.dataset.rvphoto && t.files && t.files[0]) { const f = t.files[0]; t.value = ''; rvPhoto(f); return; }
-    if (t.dataset && t.dataset.remind) { lsSet(LS_REMIND, t.value); renderBanners(); toast(+t.value ? 'Backup reminders: every ' + (+t.value === 7 ? 'week' : +t.value === 14 ? '2 weeks' : 'month') : 'Backup reminders off'); return; }
+    if (t.dataset && t.dataset.remind) { lsSet(LS_REMIND, t.value); render(); toast(+t.value ? 'Backup reminders: every ' + (+t.value === 7 ? 'week' : +t.value === 14 ? '2 weeks' : 'month') : 'Backup reminders off'); return; }
     if (t.id === 'chkIn' && t.files && t.files[0]) { const f = t.files[0]; t.value = ''; f.text().then((txt) => showCheck(parseBackup(txt), f.name)).catch((err) => openSheet(`<h2>Not a usable backup</h2><p class="muted" style="margin:10px 0">${esc(err.message || 'Could not read that file')}</p><div class="actions"><button class="btn primary" data-act="close-sheet">Close</button></div>`)); return; }
     if (t.dataset && t.dataset.confirmcovers) { lsSet(LS_CONFIRM, t.checked ? '1' : '0'); toast(t.checked ? 'You’ll be asked to confirm covers after adding games' : 'Covers will not be confirmed after adding'); return; }
     if (t.dataset && t.dataset.autocover) { lsSet(LS_AUTOCOVER, t.checked ? '1' : '0'); if (t.checked) enqueueCovers(libraryCoverEntries()); toast(t.checked ? 'Covers will load automatically' : 'Automatic cover loading is off'); return; }
@@ -1652,6 +1831,6 @@
     }
   }
   // test hook (read-only helpers, harmless in production)
-  window.__savePoint = { pickRandom, pickWeight, rndPool, rnd, get state() { return state; }, get covers() { return covers; }, storage, parseBackup, CATALOG, APP_VERSION, covq, cat, catMiss, titleVariants };
+  window.__savePoint = { yearData, parseTags, cleanTags, noteMatches, tagCounts, relInfo, libRel, soonList, daysUntil, pickRandom, pickWeight, rndPool, rnd, get state() { return state; }, get covers() { return covers; }, storage, parseBackup, CATALOG, APP_VERSION, covq, cat, catMiss, titleVariants };
   boot();
 })();

@@ -44,7 +44,7 @@ Amnesia: Rebirth | PS4 PC
 Amnesia: The Bunker | PS4 PC Xbox
 Amnesia: The Dark Descent | PS4 PC | 2010
 Among Us | PS5 PS4 PC Xbox Switch Mobile | 2018
-Ananta | PS5 PC | TBA
+Ananta | PS5 PC | 2027-01-15
 Angry Birds | Mobile | 2009
 Animal Crossing: New Horizons | Switch | 2020
 Animal Crossing: Pocket Camp | Mobile | 2017
@@ -57,7 +57,7 @@ Apex Legends Mobile | Mobile | 2022
 Aphelion | PS5 PC Xbox | 2026-04-28
 Arc Raiders | PS5 PC Xbox | 2025
 Arena of Valor | Switch Mobile | 2016
-Ark 2 | PC Xbox | TBA
+Ark 2 | PC Xbox | 2028
 ARK: Survival Ascended | PS5 PC Xbox | 2023
 ARK: Survival Evolved | PS4 PC Xbox Switch Mobile | 2017
 Arknights: Endfield | PS5 PC Mobile | 2026
@@ -199,7 +199,7 @@ Clair Obscur: Expedition 33 | PS5 PC Xbox | 2025
 Clash of Clans | Mobile | 2012
 Clash Royale | Mobile | 2016
 Clive Barker's Hellraiser: Revival | PS5 PC Xbox Switch | 2026-10-08
-Clockwork Revolution | PC Xbox | TBA
+Clockwork Revolution | PC Xbox | 2027
 Cocoon | PS5 PS4 PC Xbox Switch
 Code Vein | PS4 PC Xbox
 Code Vein II | PS5 PC Xbox | 2026-01-30
@@ -234,7 +234,7 @@ Cyberpunk 2077: Phantom Liberty | PS5 PC Xbox | 2023
 Cyberpunk 2077: Ultimate Edition | PS5 PC Xbox Switch | 2025
 
 # ── D ──
-Danganronpa 2x2 | PS5 PS4 PC Xbox Switch
+Danganronpa 2x2 | PS5 PS4 PC Xbox Switch | 2027-01-14
 Dark Souls II: Scholar of the First Sin | PS4 PC Xbox
 Dark Souls III | PS4 PC Xbox
 Dark Souls Remastered | PS4 PC Xbox Switch
@@ -368,7 +368,7 @@ Euro Truck Simulator 2 | PC
 Everybody's Golf | PS4 | 2017
 Evil Dead: The Game | PS5 PS4 PC Xbox Switch | 2022
 Evil Genius 2: World Domination | PC | 2021
-Exodus | PS5 PC Xbox | 2027
+Exodus | PS5 PC Xbox | 2027-04-07
 
 # ── F ──
 F1 2015 | PS4 PC Xbox | 2015
@@ -382,7 +382,7 @@ F1 22 | PS5 PS4 PC Xbox
 F1 23 | PS5 PS4 PC Xbox
 F1 24 | PS5 PS4 PC Xbox
 F1 25 | PS5 PC Xbox
-Fable | PS5 PC Xbox | TBA
+Fable | PS5 PC Xbox | 2027-02-23
 Fable Anniversary | PC Xbox | 2014
 Fable II | Xbox | 2008
 Fable III | PC Xbox | 2010
@@ -436,7 +436,7 @@ Final Fantasy VII Rebirth | PS5 PC Xbox Switch | 2024
 Final Fantasy VII Remake | PS5 PS4 PC
 Final Fantasy VII Remake Intergrade | PS5 PS4 PC Xbox Switch | 2021
 Final Fantasy VII Remake Part 3 |  | TBA
-Final Fantasy VII Revelation | PS5 PC Xbox
+Final Fantasy VII Revelation | PS5 PC Xbox | 2027-04-08
 Final Fantasy VIII Remastered | PS4 PC Xbox Switch | 2019
 Final Fantasy X/X-2 HD Remaster | PS4 PC Xbox Switch | 2013
 Final Fantasy XII: The Zodiac Age | PS4 PC Xbox Switch | 2017
@@ -518,7 +518,7 @@ God of War | PS4 PC | 2018
 God of War (2005) | PS4
 God of War III | PS4 | 2015
 God of War III Remastered | PS4 | 2015
-God of War Laufey | PS5
+God of War Laufey | PS5 | 2027-02-16
 God of War Ragnarök | PS5 PS4 PC | 2022
 God of War: Sons of Sparta | PS5 | 2026
 Golf Club 2019 | PS4 PC Xbox | 2018
@@ -685,7 +685,7 @@ Kingdom Come: Deliverance II | PS5 PC Xbox | 2025
 Kingdom Hearts HD 1.5+2.5 ReMIX | PS4 PC Xbox Switch
 Kingdom Hearts HD 2.8 Final Chapter Prologue | PS4 PC Xbox Switch
 Kingdom Hearts III | PS4 PC Xbox Switch
-Kingdom Hearts IV | PS5 PC Xbox Switch | TBA
+Kingdom Hearts IV | PS5 PC Xbox Switch | 2027
 Kingdoms of Amalur: Re-Reckoning | PS4 PC Xbox Switch | 2020
 Kirby Air Riders | Switch | 2025
 Kirby and the Forgotten Land | Switch | 2022
@@ -745,7 +745,7 @@ Little Nightmares | PS4 PC Xbox Switch | 2017
 Little Nightmares II | PS4 PC Xbox Switch | 2021
 Little Nightmares III | PS5 PS4 PC Xbox Switch | 2025
 Live A Live | PS5 PC Switch | 2022
-Lords of the Fallen II | PS5 PC Xbox | TBA
+Lords of the Fallen II | PS5 PC Xbox | 2027
 Lost Ark | PC | 2022
 Lost Judgment | PS5 PS4 PC Xbox | 2021
 Lost Sphear | PS4 PC Xbox Switch | 2018
@@ -783,7 +783,7 @@ Mario + Rabbids Sparks of Hope | Switch
 Mario Strikers: Battle League | Switch | 2022
 Mario Tennis Aces | Switch
 Mario Tennis Fever | Switch | 2026
-Marvel 1943: Rise of Hydra | PS5 PC Xbox | TBA
+Marvel 1943: Rise of Hydra | PS5 PC Xbox | 2027
 Marvel Cosmic Invasion | PS5 PS4 PC Xbox Switch | 2025
 Marvel Future Fight | Mobile | 2015
 Marvel MaXimum Collection | PS5 PC Xbox Switch | 2026
@@ -826,7 +826,7 @@ Metal Gear Solid V: The Phantom Pain | PS4 PC Xbox
 Metal Gear Survive | PS4 PC Xbox
 Metaphor: ReFantazio | PS5 PS4 PC Xbox
 Metro 2033 Redux | PS4 PC Xbox Switch
-Metro 2039 | PS5 PC Xbox | TBA
+Metro 2039 | PS5 PC Xbox | 2027-02-04
 Metro Exodus | PS5 PS4 PC Xbox
 Metro: Last Light Redux | PS4 PC Xbox Switch
 Metroid Dread | Switch | 2021
@@ -898,7 +898,7 @@ NBA 2K23 | PS5 PS4 PC Xbox Switch
 NBA 2K24 | PS5 PS4 PC Xbox Switch
 NBA 2K25 | PS5 PS4 PC Xbox Switch
 NBA 2K26 | PS5 PS4 PC Xbox Switch
-NBA 2K27 | PS5 PC Xbox Switch | 2026
+NBA 2K27 | PS5 PC Xbox Switch | 2026-09-04
 NBA Live 18 | PS4 Xbox | 2017
 NBA Live 19 | PS4 Xbox | 2018
 Need for Speed (2015) | PS4 PC Xbox
@@ -985,7 +985,7 @@ Persona 3 Portable | PS4 PC Xbox Switch | 2023
 Persona 3 Reload | PS5 PS4 PC Xbox
 Persona 4 Arena Ultimax | PS4 PC Switch | 2013
 Persona 4 Golden | PS4 PC Xbox Switch
-Persona 4 Revival | PS5 PC Xbox | TBA
+Persona 4 Revival | PS5 PC Xbox | 2027-02-18
 Persona 5 | PS4 | 2016
 Persona 5 Royal | PS5 PS4 PC Xbox Switch | 2019
 Persona 5 Strikers | PS4 PC Switch | 2020
@@ -1023,9 +1023,9 @@ Pokémon Sword | Switch | 2019
 Pokémon TCG Pocket | Mobile | 2024
 Pokémon Unite | Switch Mobile | 2021
 Pokémon Violet | Switch | 2022
-Pokémon Waves | Switch | 2028
-Pokémon Winds | Switch | 2028
-Pokémon Winds and Waves | Switch | TBA
+Pokémon Waves | Switch | 2027
+Pokémon Winds | Switch | 2027
+Pokémon Winds and Waves | Switch | 2027
 Poppy Playtime: Chapter 1 | PS5 PS4 PC Xbox Switch Mobile | 2021
 Poppy Playtime: Chapter 2 | PS5 PS4 PC Xbox Switch Mobile | 2022
 Poppy Playtime: Chapter 3 | PS5 PC Xbox Switch Mobile | 2024
@@ -1099,7 +1099,7 @@ Resident Evil 4 (2005) | PS4 PC Xbox Switch
 Resident Evil 5 | PS4 PC Xbox Switch | 2009
 Resident Evil 6 | PS4 PC Xbox Switch | 2012
 Resident Evil 7: Biohazard | PS5 PS4 PC Xbox Switch | 2017
-Resident Evil Veronica | PS5 PC Xbox Switch
+Resident Evil Veronica | PS5 PC Xbox Switch | 2027
 Resident Evil: Code: Veronica X | PS4 | 2001
 Resident Evil HD Remaster | PS4 PC Xbox Switch | 2015
 Resident Evil Outbreak |  | 2003
@@ -1213,7 +1213,7 @@ Splinter Cell Remake |  | TBA
 Split Fiction | PS5 PC Xbox Switch | 2025
 Splitgate 2 | PS5 PS4 PC Xbox | 2025
 Spyro Reignited Trilogy | PS4 PC Xbox Switch | 2018
-Spyro: A Realm Beyond | PS5 PC Xbox Switch
+Spyro: A Realm Beyond | PS5 PC Xbox Switch | 2027
 Squad | PC | 2020
 Squadron 42 | PC
 Star Citizen | PC
@@ -1239,12 +1239,12 @@ Stardew Valley | PS4 PC Xbox Switch Mobile | 2016
 Starfield | PS5 PC Xbox | 2023
 Starship Troopers: Ultimate Bug War! | PS5 PC Xbox Switch | 2026
 State of Decay 2 | PC Xbox | 2018
-State of Decay 3 | PS5 PC Xbox | TBA
+State of Decay 3 | PS5 PC Xbox | 2027
 Steep | PS4 PC Xbox | 2016
 Steins;Gate Re:Boot
 Stellar Blade | PS5 PC Switch | 2024
 Stranger of Paradise: Final Fantasy Origin | PS5 PS4 PC Xbox | 2022
-Stranger Than Heaven | PS5 PC Xbox
+Stranger Than Heaven | PS5 PC Xbox | 2027-01-15
 Stray | PS5 PS4 PC Xbox Switch | 2022
 Street Fighter 30th Anniversary Collection | PS4 PC Xbox Switch
 Street Fighter 6 | PS5 PS4 PC Xbox | 2023
@@ -1366,11 +1366,11 @@ The Witch's Bakery | PS5 PC Xbox Switch | 2026-10-14
 The Witcher 2: Assassins of Kings | PC Xbox
 The Witcher 3: Wild Hunt | PS5 PS4 PC Xbox Switch | 2015
 The Witcher 3: Wild Hunt – Complete Edition | PS5 PS4 PC Xbox Switch | 2016
-The Witcher 4 | PS5 PC Xbox | TBA
+The Witcher 4 | PS5 PC Xbox | 2028
 The Witcher: Enhanced Edition | PC
 The Wolf Among Us | PS4 PC Xbox Switch
-The Wolf Among Us 2 | PS5 PC Xbox
-The Wolf Among Us Remastered | PS5 PC Xbox
+The Wolf Among Us 2 | PS5 PC Xbox | 2027
+The Wolf Among Us Remastered | PS5 PC Xbox | 2026-10-29
 Thief | PS4 PC Xbox | 2014
 Thronebreaker: The Witcher Tales | PS4 PC Xbox Switch Mobile | 2018
 Tiny Tina's Wonderlands | PS5 PS4 PC Xbox
@@ -1386,11 +1386,11 @@ Tom Clancy's The Division | PS4 PC Xbox
 Tom Clancy's The Division 2 | PS4 PC Xbox
 Tomb Raider | PC | 1996
 Tomb Raider (2013) | PS4 PC Xbox | 2013
-Tomb Raider: Catalyst | PS5 PC Xbox | TBA
+Tomb Raider: Catalyst | PS5 PC Xbox | 2027
 Tomb Raider: Definitive Edition | PS4 Xbox | 2014
 Tomb Raider I-III Remastered | PS5 PS4 PC Xbox Switch
 Tomb Raider IV-VI Remastered | PS5 PS4 PC Xbox Switch
-Tomb Raider: Legacy of Atlantis | PS5 PC Xbox | TBA
+Tomb Raider: Legacy of Atlantis | PS5 PC Xbox | 2027-02-12
 Tomodachi Life: Living the Dream | Switch | 2026-04-16
 Tony Hawk's Pro Skater 1 + 2 | PS5 PS4 PC Xbox Switch
 Tony Hawk's Pro Skater 3 + 4 | PS5 PS4 PC Xbox Switch | 2025
@@ -1430,7 +1430,7 @@ Unravel | PS4 PC Xbox | 2016
 Unravel Two | PS4 PC Xbox Switch | 2018
 Until Dawn | PS5 PS4 PC | 2015
 Until Dawn (Remake) | PS5 PC
-Until Dawn 2 | PS5
+Until Dawn 2 | PS5 | 2027-01-28
 Untitled Goose Game | PS4 PC Xbox Switch
 
 # ── V ──
@@ -1516,6 +1516,75 @@ Yakuza Kiwami 3 & Dark Ties | PS5 PS4 PC Xbox Switch | 2026-02-12
 Yakuza: Like a Dragon | PS5 PS4 PC Xbox | 2020
 Yoshi and the Mysterious Book | Switch
 Ys X: Proud Nordics | PS5 PC Switch | 2026
+
+# ── Added in v5.1 (release-date refresh, Oct 2026) ──
+End of Abyss | PS5 PC Xbox | 2026-10-01
+Octopath Traveler I & II | Switch | 2026-10-01
+Forever Ago | PS5 PC Xbox Switch | 2026-10-08
+Kingdom Hearts Collection | PS5 PC Xbox Switch | 2026-10-08
+Order of the Sinking Star | PC Switch | 2026-10-08
+Penguin Colony | PC | 2026-10-16
+Bluey's Happy Snaps | PS5 PS4 PC Xbox Switch | 2026-10-15
+Stupid Never Dies | PS5 PC | 2026-10-21
+Virtue and a Sledgehammer | PC | 2026-10-27
+Anomalith | PS5 PC Switch | 2026-10-28
+Danchi Days | PC | 2026-10-29
+Hello Kitty Party Land | Switch | 2026-10-29
+Gravhounds | PC Xbox | 2026-11-02
+Zero Parades: Director's Cut | PS5 | 2026-11-03
+Wielders of the Essence | PC | 2026-11-05
+Moomin: Midsummer Madness | PC Switch | 2026-11-12
+Trees Hate You | PC | 2026-11-16
+Apple Crumble | PC | 2026-12-03
+Guns of Eschaton | PS5 PC Xbox | 2026-12-08
+Armatus | PS5 PC Xbox Switch | 2027-01-07
+TankRat | PS5 PC | 2027-01-15
+Usual June | PC | 2027-01-20
+Elta: Defy the Gods | PS5 PC Xbox | 2027-02-02
+Yu-Gi-Oh! Tag Force GX | Switch | 2027-02-16
+Grave Seasons | PS5 PC Xbox Switch | 2027-03-09
+Road Kings | PS5 PC Xbox | 2027-03-11
+Mariachi Legends | PS5 PC Xbox Switch | 2027-04-27
+Pony Island 2: Panda Circus | PC | 2027-04-27
+Star Trek: Outposts Unknown | PC | 2026-10-20
+We Were Here Tomorrow | PS5 PC Xbox | 2026-10-20
+Mycopunk | PC | 2026-10-20
+One Piece: Grand Gourmet | PC Switch | 2026-10-23
+Hunter's Moon | PS5 | 2026-10-26
+Steins;Gate Re:Boot | PS5 PS4 Switch | 2026-10-29
+Queen's Domain | PS5 PC Xbox Switch | 2026-10-30
+Godzilla: Destroy All Monsters Melee Remastered | PS5 PC Xbox Switch | 2026-11-03
+World of Warcraft: Forever | PC | 2026-11-04
+Crymelight | PS5 PC Switch | 2026-11-04
+Edge of Memories | PS5 PC Xbox | 2026-11-05
+The Legend of Zelda: Ocarina of Time Remake | Switch | 2026-11-05
+Football Manager 27 | PS5 PC Xbox | 2026-11-10
+Sonic Pico Park | PS5 PC Xbox Switch | 2026-11-12
+Hela: Of Mice & Magic | PS5 PC Xbox Switch | 2026-12-01
+Dragon Quest Monsters: The Withered World | PS5 PC Xbox Switch | 2026-12-03
+Rayman Legends Retold | PS5 PC Xbox Switch | 2026-12-03
+Warhammer 40,000: Dawn of War IV | PC | 2026-12-03
+Professor Layton and the New World of Steam | PS5 PC Switch | 2026-12-10
+Stage Tour | PS5 PC Xbox Switch | 2026-12-10
+Metroid Ravenous | Switch | 2027-01-28
+Muramasa: Revenant Blades | PS5 PC Switch | 2027-02-04
+Wo Long 2: Wings of Ember | PS5 PC Xbox Switch | 2027-03-04
+Gundam Rogue Orbit | PS5 PC Xbox | 2027-03-05
+Eternal Anima | PS5 PC Xbox Switch | 2027-03-04
+Kena: Scars of Kosmora | PS5 PC | 2027
+Kirby and the World Beyond | Switch | 2027
+Monster Hunter Wilds: Ascendance | PS5 PC Xbox | 2027
+Xenoblade Genesis | Switch | 2027
+Crazy Taxi World Tour | PS5 PC Xbox Switch | 2027
+Dragon Ball Xenoverse 3 | PS5 PC Xbox | 2027
+Turok: Origins | PS5 PC Xbox Switch | 2027
+Senua | PS5 PC Xbox | 2027
+Mega Man: Dual Override | PS5 PC Switch | 2027
+Guild Wars 3 | PS5 PC | 2027
+Virtua Fighter Crossroads | PS5 PC Xbox | 2027
+Outward 2 | PC | 2027
+Heroes of Might and Magic III Remake | PS5 PC Xbox | 2027
+Rainbow Six Tactics | PC | 2027
 
 # ── Z ──
 Zenless Zone Zero | PS5 PC Mobile | 2024
