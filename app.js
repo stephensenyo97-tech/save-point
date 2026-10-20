@@ -7,9 +7,9 @@
   const DB_NAME = 'save-point', STORE = 'kv', KEY = 'state', UNDO_KEY = 'undo';
   const LS_MIRROR = 'savepoint.mirror.v1', LS_UNDO = 'savepoint.undo.v1', LS_DRAFT = 'savepoint.draft.', LS_HAD = 'savepoint.hadgames';
   const FORMAT = 2;
-  const APP_VERSION = 'v5.2';
+  const APP_VERSION = 'v6.2';
   const COVERS_KEY = 'covers';
-  const LS_PREF = 'savepoint.pickplat', LS_AUTOCOVER = 'savepoint.autocover', LS_CONFIRM = 'savepoint.confirmcovers', LS_REMIND = 'savepoint.remind';
+  const LS_LIBVIEW = 'savepoint.libview', LS_PREF = 'savepoint.pickplat', LS_AUTOCOVER = 'savepoint.autocover', LS_CONFIRM = 'savepoint.confirmcovers', LS_REMIND = 'savepoint.remind';
   const PLATFORMS = ['PS5', 'PS4', 'PC', 'Xbox', 'Switch', 'Mobile', 'Other'];
   const STATUSES = [
     { id: 'want', label: 'Want to Play' }, { id: 'playing', label: 'Playing' },
@@ -44,6 +44,8 @@
     journal: '<path d="M5 3h12a2 2 0 012 2v16H7a2 2 0 01-2-2V3z"/><path d="M9 8h6M9 12h6"/>',
     backup: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    list: '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>',
+    filter: '<path d="M3 5h18l-7 8v6l-4 2v-8L3 5z"/>',
     back: '<path d="M15 5l-7 7 7 7"/>',
     edit: '<path d="M4 20h4L19 9l-4-4L4 16v4z"/>',
     trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
@@ -76,6 +78,7 @@
       fav: g.fav === true, queue: Math.max(0, num(g.queue === true ? Date.now() : g.queue, 0)),
       startedAt: /^\d{4}-\d{2}-\d{2}$/.test(g.startedAt || '') ? g.startedAt : '',
       finishedAt: /^\d{4}-\d{2}-\d{2}$/.test(g.finishedAt || '') ? g.finishedAt : '',
+      leftOff: str(g.leftOff, 280).trim(),
       played: Math.min(600000, Math.max(0, Math.round(num(g.played, 0)))),
       plays: Array.isArray(g.plays) ? g.plays.map((p) => (p && /^\d{4}-\d{2}-\d{2}$/.test(p.d || '') && Math.round(num(p.m, 0)) > 0 ? { d: p.d, m: Math.min(1440, Math.round(num(p.m, 0))) } : null)).filter(Boolean).slice(-300) : [],
       sessionAt: num(g.sessionAt, 0) > 0 && num(g.sessionAt, 0) <= Date.now() + 60000 ? Math.round(num(g.sessionAt, 0)) : 0,
@@ -781,8 +784,27 @@
   /** Does a typed search match this library game's title, genres or studios? (only games from the built-in list have genres/studios) */
   function libMatches(g, q) {
     const ql = q.toLowerCase(); if (g.title.toLowerCase().includes(ql) || g.platform.toLowerCase().includes(ql)) return true;
-    const e = CATALOG_BY_KEY.get(normKey(g.title)); if (!e) return false;
+    const e = catOf(g); if (!e) return false;
     return normKey(expandQuery(q)).split(' ').every((w) => wordHit(e.key, e.mw, w));
+  }
+  /** Built-in list entry for a library game: exact title first, then short names ("FC 26"), then close titles ("Elden Ring Deluxe Edition"). Used for genres, studios and release dates only. */
+  const catMemo = new Map();
+  function catOf(g) {
+    const k = normKey(g.title); if (!k) return undefined;
+    if (catMemo.has(k) && catMemo.get(k) !== null) return catMemo.get(k) || undefined;
+    let e = CATALOG_BY_KEY.get(k);
+    if (!e) { const k2 = normKey(expandQuery(g.title)); if (k2 !== k) e = CATALOG_BY_KEY.get(k2); }
+    if (!e) { const k3 = k.replace(/\b(deluxe|ultimate|standard|premium|digital|gold|goty|game of the year|collector s|anniversary|complete|definitive|launch|day one|special|limited|edition|bundle)\b/g, ' ').replace(/\s+/g, ' ').trim(); if (k3 && k3 !== k) e = CATALOG_BY_KEY.get(k3); }
+    if (!e && k.length >= 5) {
+      let best = null, bd = 1e9, tie = false;
+      for (const c of CATALOG) {
+        const a = c.key, b = k; if (!(a.startsWith(b + ' ') || b.startsWith(a + ' '))) continue;
+        const sh = Math.min(a.length, b.length), lg = Math.max(a.length, b.length); if (sh < 5 || sh / lg < 0.6) continue;
+        const d = lg - sh; if (d < bd) { bd = d; best = c; tie = false; } else if (d === bd) tie = true;
+      }
+      if (best && !tie) e = best;
+    }
+    catMemo.set(k, e || undefined); return e;
   }
   /** Release info for a catalog entry: label shown to the user, whether it is still to come, and a sortable number. */
   const dayNum = (str) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(str); return m ? Math.round(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 864e5) : 0; };
@@ -799,9 +821,9 @@
     return { label: up ? 'Expected ' + d : d, upcoming: up, sort: +d * 10000 + 615 };
   }
   /** Release info for a library game, looked up in the built-in list (null if the game isn't in it or has no date). */
-  function libRel(g) { const e = CATALOG_BY_KEY.get(normKey(g.title)); return e && e.date ? relInfo(e) : null; }
+  function libRel(g) { const e = catOf(g); return e && e.date ? relInfo(e) : null; }
   // Short names people actually type → words used in the real titles.
-  const ALIASES = { gta: 'grand theft auto', cod: 'call of duty', mw: 'modern warfare', bo: 'black ops', rdr: 'red dead redemption', re: 'resident evil', ff: 'final fantasy', dq: 'dragon quest', gow: 'god of war', tlou: 'the last of us', nfs: 'need for speed', pes: 'pro evolution soccer', mgs: 'metal gear solid', ac: 'assassin s creed', dmc: 'devil may cry', botw: 'breath of the wild', totk: 'tears of the kingdom', sf: 'street fighter', mk: 'mortal kombat', cs: 'counter strike', lol: 'league of legends', fh: 'forza horizon', tw: 'total war', sm: 'super mario', ds: 'dark souls', er: 'elden ring', hzd: 'horizon zero dawn', nba: 'nba', ufc: 'ufc' };
+  const ALIASES = { fc: 'ea sports fc', gta: 'grand theft auto', cod: 'call of duty', mw: 'modern warfare', bo: 'black ops', rdr: 'red dead redemption', re: 'resident evil', ff: 'final fantasy', dq: 'dragon quest', gow: 'god of war', tlou: 'the last of us', nfs: 'need for speed', pes: 'pro evolution soccer', mgs: 'metal gear solid', ac: 'assassin s creed', dmc: 'devil may cry', botw: 'breath of the wild', totk: 'tears of the kingdom', sf: 'street fighter', mk: 'mortal kombat', cs: 'counter strike', lol: 'league of legends', fh: 'forza horizon', tw: 'total war', sm: 'super mario', ds: 'dark souls', er: 'elden ring', hzd: 'horizon zero dawn', nba: 'nba', ufc: 'ufc' };
   function expandQuery(q) {
     return normKey(q).split(' ').map((w) => {
       const m = /^([a-z]+?)(\d+)$/.exec(w);
@@ -837,7 +859,7 @@
   }
 
   // ───────────────────────── UI plumbing ─────────────────────────
-  const ui = { libQ: '', libStatus: 'all', libPlat: 'all', libSort: 'recent', updated: false, jQ: '', jType: 'all', jTag: '', gType: 'all', gQ: '', yearSel: 0, libGenre: 'all' };
+  const ui = { libView: (() => { try { return localStorage.getItem('savepoint.libview') === 'grid' ? 'grid' : 'list'; } catch (e) { return 'list'; } })(), libFilters: false, acc: { prog: true, det: false }, libQ: '', libStatus: 'all', libPlat: 'all', libSort: 'recent', updated: false, libStudio: 'all', jQ: '', jType: 'all', jTag: '', gType: 'all', gQ: '', yearSel: 0, libGenre: 'all' };
   let toastTimer = null, shareUrl = null, shareState = null;
   function toast(msg, isErr) {
     const t = $('#toast'); t.textContent = msg; t.className = 'show' + (isErr ? ' err' : '');
@@ -890,7 +912,7 @@
   }
   function soonCard() {
     const list = soonList(); if (!list.length) return '';
-    const row = ({ g, r }) => `<a class="soon-row" href="#/game/${encodeURIComponent(g.id)}"><div class="gc-cover xs" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'thumb')}</div><span class="sr-main"><b>${esc(g.title)}</b><small>${esc(g.platform)} · ${esc(fmtDate(CATALOG_BY_KEY.get(normKey(g.title)).date))}</small></span><span class="sr-when ${r.days <= 7 ? 'hot' : ''}">${r.days < 0 ? 'Out now' : esc(r.count[0].toUpperCase() + r.count.slice(1))}</span></a>`;
+    const row = ({ g, r }) => `<a class="soon-row" href="#/game/${encodeURIComponent(g.id)}"><div class="gc-cover xs" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'thumb')}</div><span class="sr-main"><b>${esc(g.title)}</b><small>${esc(g.platform)} · ${esc(fmtDate(catOf(g).date))}</small></span><span class="sr-when ${r.days <= 7 ? 'hot' : ''}">${r.days < 0 ? 'Out now' : esc(r.count[0].toUpperCase() + r.count.slice(1))}</span></a>`;
     return `<div class="section-title">Releasing soon</div><div class="card soon-card">${list.slice(0, 5).map(row).join('')}${list.length > 5 ? `<a class="muted small" href="#/library" data-act="open-soon" style="display:block;margin-top:8px">See all ${list.length}</a>` : ''}</div>`;
   }
   function queueCard(g) {
@@ -936,7 +958,7 @@
     }
     return state.games.filter((g) => (g.status === 'want' || (rnd.paused && g.status === 'paused')) && !g.sessionAt
       && (rnd.plat === 'all' || g.platform === rnd.plat)
-      && (rnd.genre === 'all' || (() => { const e = CATALOG_BY_KEY.get(normKey(g.title)); return e && hasGenre(e, rnd.genre); })()));
+      && (rnd.genre === 'all' || (() => { const e = catOf(g); return e && hasGenre(e, rnd.genre); })()));
   }
   const rndOpts = () => (rnd.mode === 'new' ? { id: (e) => e.key, weight: () => 1 } : null);
   function openRandom() {
@@ -956,7 +978,7 @@
       <label class="check" style="margin-top:6px"><input type="checkbox" data-rnd="${isNew ? 'upcoming' : 'paused'}" ${(isNew ? rnd.upcoming : rnd.paused) ? 'checked' : ''}><span>${isNew ? 'Include upcoming games' : 'Include games I paused'}</span></label>`;
     let body;
     if (!isNew) {
-      const g = rnd.cur && gameById(rnd.cur), e = g && CATALOG_BY_KEY.get(normKey(g.title)), info = g ? [g.platform, e && e.tags.slice(0, 3).join(', '), e && e.studios[0]].filter(Boolean).join(' · ') : '';
+      const g = rnd.cur && gameById(rnd.cur), e = g && catOf(g), info = g ? [g.platform, e && e.tags.slice(0, 3).join(', '), e && e.studios[0]].filter(Boolean).join(' · ') : '';
       body = g ? `<div class="rnd"><div class="hero-cv rnd-cv" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'full')}</div>
         <h3 class="rnd-t">${esc(g.title)}</h3><p class="muted small">${esc(info)}</p>
         <p class="muted small">${g.queue ? 'In your Up next list' : g.status === 'paused' ? 'Paused – you already started it' : 'In your Want to play list'}${poolN > 1 ? ` · 1 of ${poolN} possible` : ''}</p></div>
@@ -986,6 +1008,77 @@
     enqueueCovers(libraryCoverEntries());
     if (as === 'playing') location.hash = '#/game/' + encodeURIComponent(g.id);
   }
+
+  // ───────────────────────── glass tint + live countdown ─────────────────────────
+  const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
+  const tintCache = new Map();
+  /** Tint the page background with the colours of a game's cover (generated cover → its palette; real art → its average colour). */
+  function applyTint(g) {
+    const root = document.documentElement.style;
+    const set = (a, b) => { root.setProperty('--tint1', a); root.setProperty('--tint2', b); };
+    if (!g) return set('rgba(34,211,238,.20)', 'rgba(59,130,246,.18)');
+    const src = covers[g.id] || cat.get(normKey(g.title));
+    if (!src) { const pal = PALETTES[hash32(normKey(g.title)) % PALETTES.length]; return set(hexA(pal[0], .34), hexA(pal[1], .30)); }
+    if (tintCache.has(src)) { const t = tintCache.get(src); return set(t[0], t[1]); }
+    set('rgba(34,211,238,.20)', 'rgba(59,130,246,.18)');
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas'); c.width = c.height = 8; const x = c.getContext('2d'); x.drawImage(img, 0, 0, 8, 8);
+        const d = x.getImageData(0, 0, 8, 8).data; let r = 0, gg = 0, b = 0, n = 0;
+        for (let i = 0; i < d.length; i += 4) { if (d[i + 3] < 200) continue; r += d[i]; gg += d[i + 1]; b += d[i + 2]; n++; }
+        if (!n) return; r = Math.round(r / n); gg = Math.round(gg / n); b = Math.round(b / n);
+        const t = [`rgba(${r},${gg},${b},.40)`, `rgba(${Math.round(r * .6 + 20)},${Math.round(gg * .6 + 40)},${Math.round(b * .6 + 90)},.30)`];
+        tintCache.set(src, t); if (tintOwner === g.id) set(t[0], t[1]);
+      } catch (e) { /* keep default */ }
+    };
+    img.src = src;
+  }
+  let tintOwner = null;
+  /** Local midnight at the start of a release day (release dates have no clock time, so this is when the countdown ends). */
+  const releaseTs = (d) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d || ''); return m ? new Date(+m[1], +m[2] - 1, +m[3]).getTime() : 0; };
+  function cdText(ts) {
+    const diff = ts - Date.now(); if (diff <= 0) return 'Out now';
+    const t = Math.floor(diff / 1000), d = Math.floor(t / 86400), h = Math.floor((t % 86400) / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+    return d > 0 ? `${d}d ${pad(h)}h ${pad(m)}m ${pad(sec)}s` : `${pad(h)}:${pad(m)}:${pad(sec)}`;
+  }
+  function tickCountdowns() {
+    document.querySelectorAll('[data-cd]').forEach((el) => { const ts = +el.dataset.cd; if (!ts) return; const t = cdText(ts); if (el.textContent !== t) el.textContent = t; el.classList.toggle('now', ts - Date.now() <= 0); });
+  }
+  /** Minutes per day for the last 7 days (oldest first), plus the current streak of days with any logged play. */
+  function weekDays() {
+    const t = todayStr(), mins = new Array(7).fill(0), has = new Set();
+    state.games.forEach((g) => (g.plays || []).forEach((p) => { has.add(p.d); const d = daysBetween(p.d, t); if (d >= 0 && d < 7) mins[6 - d] += p.m; }));
+    let streak = 0, k = has.has(t) ? 0 : 1; while (k < 400) { const d = new Date(Date.parse(t + 'T00:00:00Z') - k * 864e5).toISOString().slice(0, 10); if (!has.has(d)) break; streak++; k++; }
+    const labels = []; for (let i = 6; i >= 0; i--) labels.push('SMTWTFS'[new Date(Date.parse(t + 'T00:00:00Z') - i * 864e5).getUTCDay()]);
+    return { mins, streak, labels, total: mins.reduce((a, b) => a + b, 0) };
+  }
+  function weekCard() {
+    if (!state.games.some((g) => (g.plays || []).length)) return state.games.some((g) => g.status === 'playing') ? `<div class="card week"><h3 class="ct">This week</h3><p class="sub" style="margin:0">Start a session or add hours on a game and your week fills in here.</p></div>` : '';
+    const w = weekDays(), max = Math.max(1, ...w.mins);
+    return `<div class="card week"><div class="big"><div><h3 class="ct" style="margin:0">This week</h3></div><b>${esc(fmtHours(w.total))}</b></div>
+      <div class="wk-bars">${w.mins.map((m, i) => `<div class="wk-col ${m ? 'on' : ''} ${i === 6 ? 'today' : ''}"><i style="height:${m ? Math.max(8, Math.round((m / max) * 100)) : 4}%" title="${esc(fmtHours(m))}"></i><small>${w.labels[i]}</small></div>`).join('')}</div>
+      ${w.streak ? `<div class="streak">🔥 ${plural(w.streak, 'day')} in a row</div>` : ''}</div>`;
+  }
+  const STALE_MS = 30 * 864e5;
+  /** Playing / Paused games nobody has touched for 30+ days. */
+  const backlogList = () => state.games.filter((g) => (g.status === 'playing' || g.status === 'paused') && !g.sessionAt && Date.now() - g.updatedAt > STALE_MS).sort((a, b) => a.updatedAt - b.updatedAt).slice(0, 3);
+  function nudgeCard() {
+    const l = backlogList(); if (!l.length) return '';
+    return `<div class="section-title">Still on your list</div><div class="card" style="padding:6px 14px">${l.map((g) => `<div class="nudge-row"><a class="gc-cover xs" href="#/game/${encodeURIComponent(g.id)}" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'thumb')}</a><a class="nr-main" href="#/game/${encodeURIComponent(g.id)}" style="color:inherit;text-decoration:none"><b>${esc(g.title)}</b><small>${esc(statusLabel(g.status))} · last touched ${daysSince(g.updatedAt)} days ago</small></a>${g.status === 'paused' ? `<button class="btn sm" data-act="quick-status" data-id="${esc(g.id)}" data-v="playing">Resume</button>` : `<button class="btn sm" data-act="quick-status" data-id="${esc(g.id)}" data-v="paused">Pause</button>`}</div>`).join('')}</div>`;
+  }
+  function heroCard(g, isQueue) {
+    const live = g.sessionAt, cv = `<div class="hero-cv" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'full')}</div>`;
+    return `<div class="hero-now"><div class="eyebrow">${isQueue ? 'Up next' : 'Continue playing'}</div>
+      <a class="hero-row" href="#/game/${encodeURIComponent(g.id)}">${cv}<div class="hero-info"><h2>${esc(g.title)}</h2><span class="meta"><span class="plat">${esc(g.platform)}</span>${g.played ? ' · ' + esc(fmtHours(g.played)) : ''}${notesOf(g.id).length ? ' · ' + plural(notesOf(g.id).length, 'note') : ''}</span>${g.leftOff ? `<span class="meta leftoff-line">📍 ${esc(g.leftOff)}</span>` : ''}${isQueue ? '' : `<div class="bar"><i style="width:${g.progress}%"></i></div><span class="meta">${g.progress}% complete</span>`}</div></a>
+      ${live ? `<div class="sess"><b>Session running</b><span data-sess="${esc(g.id)}">${esc(fmtHours(sessionMin(g)))}</span></div>` : ''}
+      <div class="hero-act">${isQueue ? `<button class="btn primary" data-act="start-game" data-id="${esc(g.id)}">${icon('next')}Start</button>` : live ? `<button class="btn primary" data-act="end-session" data-id="${esc(g.id)}">■ End session</button>` : `<button class="btn primary" data-act="start-session" data-id="${esc(g.id)}">▶ Start session</button>`}<a class="btn" href="#/game/${encodeURIComponent(g.id)}">Open</a></div></div>`;
+  }
+  function releasingRow() {
+    const list = soonList(); if (!list.length) return '';
+    const items = list.slice(0, 8).map(({ g, r }) => { const e = catOf(g), ts = releaseTs(e.date); return `<a class="rel" href="#/game/${encodeURIComponent(g.id)}"><div class="cvbox" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'thumb')}</div><b>${esc(g.title)}</b><span class="cd ${r.days < 0 ? 'now' : ''}" data-cd="${ts}">${esc(cdText(ts))}</span><small>${esc(fmtDate(e.date))}</small></a>`; }).join('');
+    return `<div class="section-title">Releasing soon <a href="#/library" data-act="open-soon">${list.length > 8 ? `See all ${list.length}` : 'Library'}</a></div><div class="soonrow">${items}</div><p class="rel-note">Counting down to 00:00 your time on release day.</p>`;
+  }
   function viewHome() {
     const c = (s) => state.games.filter((g) => g.status === s).length;
     const playing = state.games.filter((g) => g.status === 'playing').sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5);
@@ -999,8 +1092,12 @@
     if (!state.games.length) {
       return { title: LOGO + 'Save Point', fab: null, html: emptyState('pad', 'Your journal is empty', 'Add the first game you’re playing, then jot down missions, boss tips, codes and builds as you go.', `<button class="btn primary" data-act="add-game">${icon('plus')}Add your first game</button>`) };
     }
+    const hero = playing[0] || queued[0] || null, heroIsQueue = !playing[0] && !!queued[0];
+    const others = state.games.filter((g) => g.status === 'playing' && (!hero || g.id !== hero.id)).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8);
     return {
-      title: LOGO + 'Save Point', fab: { label: 'Game', act: 'add-game' }, html: `
+      title: LOGO + 'Save Point', fab: { label: 'Game', act: 'add-game' }, tint: hero, html: `
+      ${hero ? heroCard(hero, heroIsQueue) : ''}
+      ${others.length ? `<div class="also" aria-label="Also playing">${others.map((g) => `<a href="#/game/${encodeURIComponent(g.id)}"><div class="cvbox" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'thumb')}</div><small>${esc(g.title)}</small></a>`).join('')}</div>` : ''}
       <div class="stats">
         <div class="stat"><b>${state.games.length}</b><span>Games added</span></div>
         <div class="stat accent"><b>${c('playing')}</b><span>Playing now</span></div>
@@ -1008,12 +1105,12 @@
       </div>
       <div class="substats">${c('want')} want to play · ${c('paused')} paused · ${plural(state.notes.length, 'note')}${state.games.some((g) => g.fav) ? ` · <span class="heart">♥</span> ${state.games.filter((g) => g.fav).length}` : ''}${totalPlayed() ? ` · ${fmtHours(totalPlayed())} played` : ''}</div>
       <button class="btn block rnd-btn" data-act="random-game">🎲 What should I play?</button>
-      ${soonCard()}
-      ${queued.length ? `<div class="section-title">Up next <a href="#/library" data-act="open-queue">See all</a></div>${queued.map(queueCard).join('')}` : ''}
-      <div class="section-title">Continue playing <a href="#/library">All games</a></div>
-      ${playing.length ? playing.map(gameCard).join('') : '<p class="muted card">Nothing marked “Playing” right now.</p>'}
+      ${weekCard()}
+      ${releasingRow()}
+      ${queued.length && !heroIsQueue ? `<div class="section-title">Up next <a href="#/library" data-act="open-queue">See all</a></div>${queued.map(queueCard).join('')}` : queued.length > 1 ? `<div class="section-title">Up next <a href="#/library" data-act="open-queue">See all</a></div>${queued.slice(1).map(queueCard).join('')}` : ''}
+      ${nudgeCard()}
       <div class="section-title">Recent notes <a href="#/journal">All notes</a></div>
-      ${recent.length ? recent.map((n) => noteCard(n, { showGame: true })).join('') : '<p class="muted card">No notes yet. Open a game and add one.</p>'}`
+      ${recent.length ? recent.slice(0, 3).map((n) => noteCard(n, { showGame: true })).join('') : '<p class="muted card">No notes yet. Open a game and add one.</p>'}`
     };
   }
 
@@ -1021,7 +1118,8 @@
     let list = state.games.slice();
     const q = ui.libQ.trim().toLowerCase();
     if (q) list = list.filter((g) => libMatches(g, q));
-    if (ui.libGenre !== 'all') list = list.filter((g) => { const e = CATALOG_BY_KEY.get(normKey(g.title)); return e && hasGenre(e, ui.libGenre); });
+    if (ui.libStudio !== 'all') list = list.filter((g) => { const e = catOf(g); return e && e.studios.includes(ui.libStudio); });
+    if (ui.libGenre !== 'all') list = list.filter((g) => { const e = catOf(g); return e && hasGenre(e, ui.libGenre); });
     if (ui.libStatus === 'fav') list = list.filter((g) => g.fav);
     else if (ui.libStatus === 'queue') list = list.filter((g) => g.queue);
     else if (ui.libStatus === 'soon') list = list.filter((g) => { const r = libRel(g); return r && r.upcoming; });
@@ -1032,20 +1130,33 @@
     if (ui.libStatus === 'queue') list.sort((a, b) => a.queue - b.queue);
     if (ui.libStatus === 'soon') list.sort((a, b) => libRel(a).sort - libRel(b).sort || a.title.localeCompare(b.title));
     if (!list.length) return emptyState('library', state.games.length ? 'No matches' : 'No games yet', state.games.length ? 'Try a different search or filter.' : 'Tap “Game” to add one.');
-    return `<p class="muted small" style="margin:8px 4px">${plural(list.length, 'game')}</p>` + list.map(gameCard).join('');
+    return `<p class="muted small" style="margin:8px 4px">${plural(list.length, 'game')}</p>` + (ui.libView === 'grid' ? `<div class="grid3">${list.map(gameTile).join('')}</div>` : list.map(gameCard).join(''));
   }
+  /** Cover-first tile for the Library grid: fav heart, rating, a progress ring, and a countdown for upcoming games. */
+  function gameTile(g) {
+    const R = 11, C = 2 * Math.PI * R, r = g.status === 'want' ? libRel(g) : null, soon = r && r.upcoming && r.exact ? (r.days <= 0 ? 'Out' : r.days + 'd') : '';
+    const ring = g.status === 'finished' ? `<span class="ring done" aria-label="Finished"><svg viewBox="0 0 28 28"><circle cx="14" cy="14" r="${R}"/><circle class="p" cx="14" cy="14" r="${R}" stroke-dasharray="${C}" stroke-dashoffset="0"/></svg><i>✓</i></span>`
+      : g.progress > 0 ? `<span class="ring" aria-label="${g.progress}% complete"><svg viewBox="0 0 28 28"><circle cx="14" cy="14" r="${R}"/><circle class="p" cx="14" cy="14" r="${R}" stroke-dasharray="${C}" stroke-dashoffset="${(C * (1 - g.progress / 100)).toFixed(1)}"/></svg><i>${g.progress}</i></span>` : '';
+    return `<a class="tile" href="#/game/${encodeURIComponent(g.id)}"><div class="tile-cv" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'thumb')}${g.fav ? '<span class="tb hrt">♥</span>' : ''}${g.rating ? `<span class="tb rt">★ ${g.rating}</span>` : ''}${g.sessionAt ? '<span class="tb live">●</span>' : ''}${ring}${soon ? `<span class="tb soon">${esc(soon)}</span>` : ''}</div><b>${esc(g.title)}</b><small><span class="dot st-${g.status}"></span>${esc(g.platform)}</small></a>`;
+  }
+  const filtersActive = () => (ui.libPlat !== 'all') + (ui.libStudio !== 'all') + (ui.libGenre !== 'all') + (ui.libSort !== 'recent');
   function viewLibrary() {
     const plats = [...new Set(state.games.map((g) => g.platform))].sort();
-    const gcount = {}; state.games.forEach((g) => { const e = CATALOG_BY_KEY.get(normKey(g.title)); if (e) MAIN_GENRES.forEach((n) => { if (hasGenre(e, n)) gcount[n] = (gcount[n] || 0) + 1; }); });
+    const gcount = {}; state.games.forEach((g) => { const e = catOf(g); if (e) MAIN_GENRES.forEach((n) => { if (hasGenre(e, n)) gcount[n] = (gcount[n] || 0) + 1; }); });
+    const scount = new Map(); state.games.forEach((g) => { const e = catOf(g); if (e) e.studios.forEach((x) => scount.set(x, (scount.get(x) || 0) + 1)); });
+    const libStudios = [...scount.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 40).sort((a, b) => a[0].localeCompare(b[0]));
     const libGenres = MAIN_GENRES.filter((n) => gcount[n]).map((n) => [n, gcount[n]]);
     const chips = [{ id: 'all', label: 'All' }, ...STATUSES, { id: 'fav', label: '♥ Favorites' }, { id: 'queue', label: 'Up next' }, ...(state.games.some((g) => { const r = libRel(g); return r && r.upcoming; }) ? [{ id: 'soon', label: '📅 Upcoming' }] : [])].map((s) => `<button class="chip ${ui.libStatus === s.id ? 'on' : ''}" data-act="set-ui" data-k="libStatus" data-v="${s.id}">${esc(s.label)}</button>`).join('');
     return {
       title: 'Library', fab: { label: 'Game', act: 'add-game' }, html: `
-      <input type="search" placeholder="Search games, genres, studios…" value="${esc(ui.libQ)}" data-bind="libQ" aria-label="Search games, genres or studios" enterkeyhint="search">
-      <div class="chips" style="margin-top:10px">${chips}</div>
-      <div class="filters">
+      <div class="lib-bar"><div class="lb-row"><input type="search" placeholder="Search games, studios…" value="${esc(ui.libQ)}" data-bind="libQ" aria-label="Search games, genres or studios" enterkeyhint="search">
+        <button class="icon-btn" data-act="lib-view" data-v="${ui.libView === 'grid' ? 'list' : 'grid'}" aria-label="${ui.libView === 'grid' ? 'Show as list' : 'Show as cover grid'}">${icon(ui.libView === 'grid' ? 'list' : 'library')}</button>
+        <button class="icon-btn fbtn ${ui.libFilters ? 'on' : ''}" data-act="toggle-filters" aria-label="Filters" aria-expanded="${!!ui.libFilters}">${icon('filter')}<em id="fCount" ${filtersActive() ? '' : 'hidden'}>${filtersActive()}</em></button></div>
+        <div class="chips">${chips}</div></div>
+      <div class="filters libf ${ui.libFilters ? 'open' : ''}">
         <select data-bind="libPlat" aria-label="Platform"><option value="all">All platforms</option>${plats.map((p) => `<option ${ui.libPlat === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select>
         <select data-bind="libSort" aria-label="Sort"><option value="recent" ${ui.libSort === 'recent' ? 'selected' : ''}>Recently active</option><option value="title" ${ui.libSort === 'title' ? 'selected' : ''}>Title A–Z</option><option value="progress" ${ui.libSort === 'progress' ? 'selected' : ''}>Most complete</option><option value="rating" ${ui.libSort === 'rating' ? 'selected' : ''}>Highest rated</option><option value="played" ${ui.libSort === 'played' ? 'selected' : ''}>Most hours played</option></select>
+        ${libStudios.length ? `<select data-bind="libStudio" aria-label="Studio" class="f-wide"><option value="all">All studios</option>${libStudios.map(([n, c]) => `<option value="${esc(n)}" ${ui.libStudio === n ? 'selected' : ''}>${esc(n)} (${c})</option>`).join('')}</select>` : ''}
         ${libGenres.length ? `<select data-bind="libGenre" aria-label="Genre" class="f-wide"><option value="all">All genres</option>${libGenres.map(([n, c]) => `<option value="${esc(n)}" ${ui.libGenre === n ? 'selected' : ''}>${esc(n)} (${c})</option>`).join('')}</select>` : ''}
       </div>
       ${state.games.some((g) => !covers[g.id]) ? `<button class="btn sm block" data-act="fetch-all-covers" style="margin-top:12px">Find covers for my games</button>` : ''}
@@ -1081,18 +1192,19 @@
   function viewJournal() {
     const chips = [{ id: 'all', label: 'All' }, ...NOTE_TYPES].map((t) => `<button class="chip ${ui.jType === t.id ? 'on' : ''}" data-act="set-ui" data-k="jType" data-v="${t.id}">${esc(t.label)}</button>`).join('');
     const tc = tagCounts().sort((x, y) => (y[0] === ui.jTag) - (x[0] === ui.jTag)), tagRow = tc.length ? `<div class="chips tagrow" aria-label="Tags">${tc.slice(0, 20).map(([t, c]) => `<button class="chip tg ${ui.jTag === t ? 'on' : ''}" data-act="tag-filter" data-t="${esc(t)}" ${ui.jTag === t ? 'data-off="1"' : ''}>#${esc(t)} ${c}</button>`).join('')}</div>` : '';
-    return { title: 'Journal', fab: null, html: `<input type="search" placeholder="Search notes, tags, games…" value="${esc(ui.jQ)}" data-bind="jQ" aria-label="Search notes" enterkeyhint="search"><div class="chips" style="margin-top:10px">${chips}</div>${tagRow}<div id="listBox">${journalList()}</div>` };
+    return { title: 'Journal', fab: null, html: `<div class="lib-bar"><input type="search" placeholder="Search notes, tags, games…" value="${esc(ui.jQ)}" data-bind="jQ" aria-label="Search notes" enterkeyhint="search"><div class="chips" style="margin-top:10px">${chips}</div>${tagRow}</div><div id="listBox">${journalList()}</div>` };
   }
 
   /** Genre and studio chips for a game from the built-in list; tapping one searches your library for it. */
   function gameMetaChips(g) {
-    const e = CATALOG_BY_KEY.get(normKey(g.title)); if (!e || (!e.tags.length && !e.studios.length)) return '';
+    const e = catOf(g); if (!e || (!e.tags.length && !e.studios.length)) return '';
     const chip = (t) => `<button type="button" class="mchip" data-act="search-lib" data-q="${esc(t)}">${esc(t)}</button>`;
     return `<div class="mchips">${e.tags.slice(0, 4).map(chip).join('')}${e.studios.slice(0, 2).map((x) => chip(x).replace('class="mchip"', 'class="mchip studio"')).join('')}</div>`;
   }
   function relLine(g) {
     const r = libRel(g); if (!r || !r.upcoming) return '';
-    return `<p class="rel-line">📅 ${esc(r.label)}${r.count ? ' · ' + esc(r.count) : ''}</p>`;
+    const e = catOf(g), ts = r.exact && e ? releaseTs(e.date) : 0;
+    return `<p class="rel-line">📅 ${esc(r.label)}${ts ? ` · <span class="cd-line" data-cd="${ts}">${esc(cdText(ts))}</span>` : r.count ? ' · ' + esc(r.count) : ''}</p>`;
   }
   function gameNotesHTML(g) {
     const all = notesOf(g.id).sort(byNewestNote);
@@ -1104,28 +1216,35 @@
   function viewGame(id) {
     const g = gameById(id);
     if (!g) return { title: 'Not found', back: '#/library', fab: null, html: emptyState('library', 'Game not found', 'It may have been deleted.', '<a class="btn primary" href="#/library">Back to library</a>') };
-    const all = notesOf(g.id).sort(byNewestNote);
+    const all = notesOf(g.id).sort(byNewestNote), hasRealCover = !!(covers[g.id] || cat.get(normKey(g.title))), notStarted = g.status === 'want' && !(g.rating || g.progress || g.played || g.startedAt || g.finishedAt);
     const counts = (t) => all.filter((n) => n.type === t).length;
     const chips = [{ id: 'all', label: `All ${all.length}` }, ...NOTE_TYPES.filter((t) => counts(t.id)).map((t) => ({ id: t.id, label: `${t.label} ${counts(t.id)}` }))]
       .map((t) => `<button class="chip ${ui.gType === t.id ? 'on' : ''}" data-act="set-ui" data-k="gType" data-v="${t.id}">${esc(t.label)}</button>`).join('');
     return {
-      title: esc(g.title), back: '#/library', fab: { label: 'Note', act: 'add-note', id: g.id }, html: `
-      <div class="card">
-        <div class="hero"><div class="hero-cv" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'full')}</div><div class="hero-side">
-          <span class="plat">${esc(g.platform)}</span><span class="muted small">Added ${esc(fmtDate(dateStr(new Date(g.createdAt))))}</span>
-          <button class="btn sm" data-act="find-cover" data-id="${esc(g.id)}">${icon('share')}Find cover online</button>
-          <button class="btn sm" data-act="pick-cover">${icon('upload')}${covers[g.id] ? 'Change photo' : 'Use my photo'}</button>
-          ${covers[g.id] ? `<button class="btn sm" data-act="clear-cover" data-id="${esc(g.id)}">Use generated cover</button>` : ''}
-          <input id="coverIn" type="file" accept="image/*" data-cover="${esc(g.id)}" hidden>
-        </div></div>
-        ${gameMetaChips(g)}
-        ${relLine(g)}
-        <div class="seg" role="group" aria-label="Status">${STATUSES.map((s) => `<button class="${g.status === s.id ? 'on' : ''}" data-act="quick-status" data-id="${g.id}" data-v="${s.id}">${esc(s.label)}</button>`).join('')}</div>
-        <div class="row tog">
-          <button class="btn ${g.fav ? 'on fav' : ''}" data-act="toggle-fav" data-id="${esc(g.id)}" aria-pressed="${g.fav}">${icon('heart')}${g.fav ? 'Favorite' : 'Add to favorites'}</button>
-          ${g.status === 'playing' || g.status === 'finished' ? '' : `<button class="btn ${g.queue ? 'on' : ''}" data-act="toggle-queue" data-id="${esc(g.id)}" aria-pressed="${!!g.queue}">${icon('next')}${g.queue ? 'In Up next' : 'Up next'}</button>`}
-        </div>
-        ${g.status === 'want' && !(g.rating || g.progress || g.played || g.startedAt || g.finishedAt) ? `<div class="notstarted"><p><b>Not started yet.</b> Rating, completion and hours show up once you start playing.</p><button class="btn primary block" data-act="start-game" data-id="${esc(g.id)}">${icon('next')}Start playing</button><p class="muted small">Already finished it? Tap <b>Finished</b> above and you can rate it.</p></div>` : `
+      title: esc(g.title), back: '#/library', fab: { label: 'Note', act: 'add-note', id: g.id }, tint: g, html: `
+      <div class="gp-hero"><div class="gp-bg" data-ck="${esc(normKey(g.title))}" aria-hidden="true">${coverHTML(g, 'full')}</div>
+        <div class="gp-row"><div class="gp-cover" data-ck="${esc(normKey(g.title))}">${coverHTML(g, 'full')}</div>
+          <div class="gp-side">
+            <span class="pill st-${g.status}">${esc(statusLabel(g.status))}</span>
+            <span class="plat">${esc(g.platform)}${g.rating ? ` · <span class="rate-badge">★ ${g.rating}/10</span>` : ''}</span>
+            <span class="muted small">${g.played ? esc(fmtHours(g.played)) + ' played · ' : ''}Added ${esc(fmtDate(dateStr(new Date(g.createdAt))))}</span>
+            ${g.sessionAt ? '<span class="live-badge">● Session running</span>' : ''}
+            ${relLine(g)}
+            ${hasRealCover ? '' : `<button class="btn sm" data-act="find-cover" data-id="${esc(g.id)}">${icon('share')}Find cover online</button>`}
+          </div></div>
+      </div>
+      ${gameMetaChips(g)}
+      <div class="seg" role="group" aria-label="Status">${STATUSES.map((s) => `<button class="${g.status === s.id ? 'on' : ''}" data-act="quick-status" data-id="${g.id}" data-v="${s.id}">${esc(s.label)}</button>`).join('')}</div>
+      <div class="quick">
+        <button class="qbtn ${g.fav ? 'on fav' : ''}" data-act="toggle-fav" data-id="${esc(g.id)}" aria-pressed="${g.fav}">${icon('heart')}<span>${g.fav ? 'Favorite' : 'Favorite'}</span></button>
+        ${g.status === 'playing' || g.status === 'finished' ? '' : `<button class="qbtn ${g.queue ? 'on' : ''}" data-act="toggle-queue" data-id="${esc(g.id)}" aria-pressed="${!!g.queue}">${icon('next')}<span>${g.queue ? 'In Up next' : 'Up next'}</span></button>`}
+        <button class="qbtn" data-act="share-card" data-id="${esc(g.id)}">${icon('share')}<span>Share</span></button>
+        <button class="qbtn" data-act="edit-game" data-id="${esc(g.id)}">${icon('edit')}<span>Edit</span></button>
+      </div>
+      ${g.leftOff ? `<button class="leftoff" data-act="edit-leftoff" data-id="${esc(g.id)}"><small>📍 WHERE I LEFT OFF</small><span>${esc(g.leftOff)}</span></button>` : g.status === 'finished' ? '' : `<button class="leftoff empty" data-act="edit-leftoff" data-id="${esc(g.id)}"><span>📍 Add where you left off</span></button>`}
+      ${notStarted ? `<div class="notstarted"><p><b>Not started yet.</b> Rating, completion and hours show up once you start playing.</p><button class="btn primary block" data-act="start-game" data-id="${esc(g.id)}">${icon('next')}Start playing</button><p class="muted small">Already finished it? Tap <b>Finished</b> above and you can rate it.</p></div>` : `
+      <div class="acc ${ui.acc.prog ? 'open' : ''}"><button class="acc-h" data-act="toggle-acc" data-k="prog" aria-expanded="${!!ui.acc.prog}"><b>Progress &amp; hours</b><small>${g.progress}%${g.played ? ' · ' + esc(fmtHours(g.played)) : ''}${g.rating ? ' · ★ ' + g.rating : ''}</small><i aria-hidden="true">›</i></button>
+        <div class="acc-b">
         <label class="f">YOUR RATING <b class="rate-val">${g.rating ? g.rating + ' / 10' : 'not rated'}</b></label>
         <div class="rate" role="group" aria-label="Rating out of 10">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => `<button class="${g.rating === v ? 'on' : ''}" data-act="set-rating" data-id="${esc(g.id)}" data-v="${v}" aria-pressed="${g.rating === v}">${v}</button>`).join('')}</div>
         <label class="f" for="prog">COMPLETION</label>
@@ -1142,13 +1261,18 @@
           <div class="dwrap"><input id="dEnd" type="date" data-date="finishedAt" data-id="${esc(g.id)}" value="${esc(g.finishedAt)}">${g.finishedAt ? `<button class="x" data-act="clear-date" data-k="finishedAt" data-id="${esc(g.id)}" aria-label="Clear finish date">✕</button>` : ''}</div>
         </div>
         ${g.startedAt && g.finishedAt && g.finishedAt >= g.startedAt ? `<p class="muted small" style="margin-top:8px">Finished in ${plural(daysBetween(g.startedAt, g.finishedAt) + 1, 'day')}.</p>` : ''}
-        `}
-        <div class="row" style="margin-top:14px"><button class="btn" data-act="edit-game" data-id="${esc(g.id)}">${icon('edit')}Edit</button><button class="btn" data-act="share-card" data-id="${esc(g.id)}">${icon('share')}Share</button><button class="btn danger" data-act="del-game" data-id="${esc(g.id)}">${icon('trash')}Delete</button></div>
-      </div>
-      <div class="section-title">Notes</div>
+        </div></div>`}
+      <div class="acc ${ui.acc.det ? 'open' : ''}"><button class="acc-h" data-act="toggle-acc" data-k="det" aria-expanded="${!!ui.acc.det}"><b>Cover &amp; more</b><small>cover, delete</small><i aria-hidden="true">›</i></button>
+        <div class="acc-b">
+          <div class="row">${hasRealCover ? `<button class="btn sm" data-act="find-cover" data-id="${esc(g.id)}">${icon('share')}Find cover online</button>` : ''}<button class="btn sm" data-act="pick-cover">${icon('upload')}${covers[g.id] ? 'Change photo' : 'Use my photo'}</button></div>
+          ${covers[g.id] ? `<div class="row" style="margin-top:8px"><button class="btn sm" data-act="clear-cover" data-id="${esc(g.id)}">Use generated cover</button></div>` : ''}
+          <input id="coverIn" type="file" accept="image/*" data-cover="${esc(g.id)}" hidden>
+          <div class="row" style="margin-top:14px"><button class="btn danger" data-act="del-game" data-id="${esc(g.id)}">${icon('trash')}Delete game</button></div>
+        </div></div>
+      <div class="section-title">Notes <span class="muted" style="text-transform:none;letter-spacing:0">${all.length || ''}</span></div>
       ${all.length >= 6 ? `<input type="search" placeholder="Search this game’s notes…" value="${esc(ui.gQ)}" data-bind="gQ" aria-label="Search this game’s notes" enterkeyhint="search" style="margin-bottom:10px">` : ''}
       ${all.length ? `<div class="chips">${chips}</div>` : ''}
-      <div id="listBox">${gameNotesHTML(g)}</div>`
+      <div id="listBox" class="timeline">${gameNotesHTML(g)}</div>`
     };
   }
 
@@ -1156,7 +1280,7 @@
   // ───────────────────────── stats ─────────────────────────
   function genreCard() {
     const cnt = {}; let known = 0;
-    state.games.forEach((g) => { const e = CATALOG_BY_KEY.get(normKey(g.title)); if (!e || !e.tags.length) return; known++; MAIN_GENRES.forEach((n) => { if (hasGenre(e, n)) cnt[n] = (cnt[n] || 0) + 1; }); });
+    state.games.forEach((g) => { const e = catOf(g); if (!e || !e.tags.length) return; known++; MAIN_GENRES.forEach((n) => { if (hasGenre(e, n)) cnt[n] = (cnt[n] || 0) + 1; }); });
     const rows = Object.entries(cnt).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 8), mx = rows.length ? rows[0][1] : 0;
     if (!rows.length) return '';
     return `<div class="card"><h3 class="ct">By genre</h3>${rows.map(([l, n]) => `<div class="hb"><span class="hb-l">${esc(l)}</span><div class="hb-t"><i style="width:${Math.max(4, Math.round((n / mx) * 100))}%"></i></div><span class="hb-n">${n}</span></div>`).join('')}<p class="muted small" style="margin-top:8px">A game can count under more than one genre. Only games from the built-in list have genres (${known} of ${state.games.length} here).</p></div>`;
@@ -1300,7 +1424,7 @@
     const best = perMonth.reduce((a, b) => (b[1] > a[1] ? b : a), ['', 0]);
     const count = (arr) => { const m = new Map(); arr.forEach((k) => m.set(k, (m.get(k) || 0) + 1)); return [...m.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)); };
     const plats = count(finished.map((g) => g.platform)).slice(0, 4);
-    const genres = count([].concat(...finished.map((g) => { const e = CATALOG_BY_KEY.get(normKey(g.title)); return e ? MAIN_GENRES.filter((n) => hasGenre(e, n)).slice(0, 2) : []; }))).slice(0, 4);
+    const genres = count([].concat(...finished.map((g) => { const e = catOf(g); return e ? MAIN_GENRES.filter((n) => hasGenre(e, n)).slice(0, 2) : []; }))).slice(0, 4);
     const tags = tagCounts(notes).slice(0, 5);
     return { y, finished, started, added, notes, minutes, mostPlayed, rated, avg, top, perMonth, best, plats, genres, tags, empty: !finished.length && !started.length && !added.length && !notes.length && !minutes };
   }
@@ -1469,6 +1593,7 @@
     let v;
     if (r.name === 'game') v = viewGame(r.id); else if (r.name === 'year') v = viewYear(r.year); else v = { home: viewHome, library: viewLibrary, stats: viewStats, journal: viewJournal, backup: viewBackup }[r.name]();
     $('#title').innerHTML = v.title;
+    tintOwner = v.tint ? v.tint.id : null; applyTint(v.tint || null);
     const back = $('#backBtn');
     if (v.back) { back.hidden = false; back.innerHTML = icon('back'); back.dataset.href = v.back; } else back.hidden = true;
     $('#view').innerHTML = v.html;
@@ -1555,6 +1680,8 @@
     html += `<button type="button" class="pick-custom" data-act="add-custom">${searching ? `Add “${esc(multi.q.trim())}” myself` : 'Can’t find it? Add a game myself'}</button>`;
     return html;
   }
+  const PICK_STUDIOS = ['EA', 'Nintendo', 'Sony', 'Xbox', 'Ubisoft', 'Capcom', 'Square Enix', 'Bandai Namco', 'Rockstar', 'FromSoftware', 'Konami', 'Sega', 'Activision', 'Bethesda', 'Take-Two'];
+  const pickStudioChips = () => PICK_STUDIOS.map((v) => `<button type="button" class="chip studio ${multi.q.trim().toLowerCase() === v.toLowerCase() ? 'on' : ''}" data-act="pick-genre" data-v="${esc(v)}">${esc(v)}</button>`).join('');
   const pickGenreChips = () => PICK_GENRES.map((v) => `<button type="button" class="chip ${multi.q.trim().toLowerCase() === v.toLowerCase() ? 'on' : ''}" data-act="pick-genre" data-v="${esc(v)}">${esc(v)}</button>`).join('');
   function pickChips() {
     const searching = normKey(multi.q).length >= 2;
@@ -1569,7 +1696,7 @@
     const list = $('#pickList'); if (!list) return;
     const top = list.scrollTop;
     list.innerHTML = pickRows(); list.scrollTop = keepScroll ? top : 0;
-    $('#pickChips').innerHTML = pickChips(); const gc = $('#pickGenres'); if (gc) gc.innerHTML = pickGenreChips(); pickFoot();
+    $('#pickChips').innerHTML = pickChips(); const gc = $('#pickGenres'); if (gc) gc.innerHTML = pickGenreChips(); const sc = $('#pickStudios'); if (sc) sc.innerHTML = pickStudioChips(); pickFoot();
     enqueueCovers(multiEntries().slice(0, multi.shown).map((g) => entryOf(g.title, g.date)));
   }
   function multiAdd() {
@@ -1577,6 +1704,7 @@
     openSheet(`<div class="pk-head"><h2>Add games</h2><button type="button" class="btn sm" data-act="add-custom">Type my own</button></div>
       <input id="pickQ" type="search" placeholder="Search games, genres or studios…" data-multiq="1" aria-label="Search games, genres or studios" enterkeyhint="search" autocomplete="off" autocapitalize="off">
       <div class="chips" id="pickGenres" style="margin-top:8px"></div>
+      <div class="chips" id="pickStudios" aria-label="Studios and publishers"></div>
       <div class="chips" id="pickChips"></div>
       <div id="pickList" class="pick-list"></div>
       <div class="pick-foot">
@@ -1650,7 +1778,7 @@
     },
     'pick-more': () => { multi.shown += 80; refreshMulti(true); },
     'pick-genre': (t) => { const v = t.dataset.v, inp = $('#pickQ'); multi.q = multi.q.trim().toLowerCase() === v.toLowerCase() ? '' : v; if (inp) inp.value = multi.q; multi.shown = 60; refreshMulti(); },
-    'search-lib': (t) => { ui.libQ = t.dataset.q || ''; ui.libStatus = 'all'; ui.libPlat = 'all'; ui.libGenre = 'all'; location.hash = '#/library'; },
+    'search-lib': (t) => { ui.libQ = t.dataset.q || ''; ui.libStatus = 'all'; ui.libPlat = 'all'; ui.libGenre = 'all'; ui.libStudio = 'all'; location.hash = '#/library'; },
     'pick-mode': (t) => { multi.mode = t.dataset.v; multi.shown = 60; refreshMulti(); },
     'add-picked': () => addPicked(),
     'set-rating': (t) => { const id = t.dataset.id, v = +t.dataset.v; mutate((s) => { const g = gameById2(s, id); g.rating = g.rating === v ? 0 : v; g.updatedAt = Date.now(); }); },
@@ -1722,6 +1850,19 @@
     'del-note': async (t) => { const id = t.dataset.id; if (await confirmBox({ title: 'Delete this note?', message: 'This can’t be undone unless you have a backup.', okLabel: 'Delete', danger: true })) mutate((s) => { s.notes = s.notes.filter((x) => x.id !== id); }, 'Note deleted'); },
     'copy-note': async (t) => { const n = state.notes.find((x) => x.id === t.dataset.id); if (!n) return; try { await navigator.clipboard.writeText(n.body); toast('Copied'); } catch (e) { toast('Copy was blocked by the browser', true); } },
     'quick-status': (t) => { const id = t.dataset.id, v = t.dataset.v; mutate((s) => { applyStatus(gameById2(s, id), v); }); },
+    'toggle-acc': (t) => { ui.acc[t.dataset.k] = !ui.acc[t.dataset.k]; render(); },
+    'edit-leftoff': (t) => {
+      const id = t.dataset.id, g = gameById(id); if (!g) return;
+      const sh = openSheet(`<h2>Where I left off</h2><p class="muted small">${esc(g.title)}</p>
+        <form id="loForm" autocomplete="off"><label class="f" for="loIn">A short reminder for next time</label>
+        <textarea id="loIn" name="lo" maxlength="280" style="min-height:110px" placeholder="e.g. Chapter 4, before the tower boss">${esc(g.leftOff || '')}</textarea>
+        <div class="actions"><button type="button" class="btn" data-act="close-sheet">Cancel</button>${g.leftOff ? '<button type="button" class="btn danger" data-act="clear-leftoff" data-id="' + esc(id) + '">Clear</button>' : ''}<button type="submit" class="btn primary">Save</button></div></form>`);
+      $('#loForm', sh).addEventListener('submit', (e) => { e.preventDefault(); const v = $('#loIn', sh).value.trim().slice(0, 280); closeSheet(); mutate((st) => { const x = gameById2(st, id); x.leftOff = v; x.updatedAt = Date.now(); }, v ? 'Saved' : 'Cleared'); });
+      setTimeout(() => { const f = $('#loIn', sh); if (f) f.focus(); }, 300);
+    },
+    'clear-leftoff': (t) => { const id = t.dataset.id; closeSheet(); mutate((st) => { const x = gameById2(st, id); x.leftOff = ''; x.updatedAt = Date.now(); }, 'Cleared'); },
+    'lib-view': (t) => { ui.libView = t.dataset.v === 'grid' ? 'grid' : 'list'; lsSet(LS_LIBVIEW, ui.libView); render(); },
+    'toggle-filters': () => { ui.libFilters = !ui.libFilters; render(); },
     'set-ui': (t) => { ui[t.dataset.k] = t.dataset.v; render(); },
     'tag-filter': (t) => { const on = t.dataset.off === '1'; ui.jTag = on ? '' : t.dataset.t; ui.jQ = ''; ui.jType = 'all'; if (route().name === 'journal') render(); else location.hash = '#/journal'; },
     'tag-add': (t) => { const f = $('#nTags'); if (!f) return; const cur = parseTags(f.value); if (!cur.includes(t.dataset.t)) cur.push(t.dataset.t); f.value = cur.join(', '); f.dispatchEvent(new Event('input', { bubbles: true })); },
@@ -1767,7 +1908,7 @@
     if (t.dataset && t.dataset.progress) { const id = t.dataset.progress, v = Math.round(+t.value); mutate((s) => { const g = gameById2(s, id); g.progress = v; if (v > 0 && g.status === 'want') applyStatus(g, 'playing'); g.updatedAt = Date.now(); }); return; }
     if (t.dataset && t.dataset.date) { const id = t.dataset.id, k = t.dataset.date, v = /^\d{4}-\d{2}-\d{2}$/.test(t.value) ? t.value : ''; mutate((s) => { const g = gameById2(s, id); g[k] = v; g.updatedAt = Date.now(); }); return; }
     if (t.dataset && t.dataset.pickopt) { if (t.dataset.pickopt === 'plat') { multi.pref = t.value; lsSet(LS_PREF, t.value); } else multi.status = t.value; return; }
-    if (t.dataset && t.dataset.bind && t.tagName === 'SELECT') { ui[t.dataset.bind] = t.value; const lb = $('#listBox'); if (lb) lb.innerHTML = libraryList(); return; }
+    if (t.dataset && t.dataset.bind && t.tagName === 'SELECT') { ui[t.dataset.bind] = t.value; const lb = $('#listBox'); if (lb) lb.innerHTML = libraryList(); const fc = $('#fCount'); if (fc) { const n = filtersActive(); fc.textContent = n; fc.hidden = !n; } return; }
     if (t.dataset && t.dataset.rvphoto && t.files && t.files[0]) { const f = t.files[0]; t.value = ''; rvPhoto(f); return; }
     if (t.dataset && t.dataset.remind) { lsSet(LS_REMIND, t.value); render(); toast(+t.value ? 'Backup reminders: every ' + (+t.value === 7 ? 'week' : +t.value === 14 ? '2 weeks' : 'month') : 'Backup reminders off'); return; }
     if (t.id === 'chkIn' && t.files && t.files[0]) { const f = t.files[0]; t.value = ''; f.text().then((txt) => showCheck(parseBackup(txt), f.name)).catch((err) => openSheet(`<h2>Not a usable backup</h2><p class="muted" style="margin:10px 0">${esc(err.message || 'Could not read that file')}</p><div class="actions"><button class="btn primary" data-act="close-sheet">Close</button></div>`)); return; }
@@ -1780,6 +1921,7 @@
     }
   });
   window.addEventListener('hashchange', () => { closeSheet(); render(); });
+  setInterval(tickCountdowns, 1000);
   setInterval(() => { document.querySelectorAll('[data-sess]').forEach((el) => { const g = gameById(el.dataset.sess); if (g && g.sessionAt) el.textContent = fmtHours(sessionMin(g)); }); }, 20000);
 
   // ───────────────────────── updates ─────────────────────────
@@ -1831,6 +1973,6 @@
     }
   }
   // test hook (read-only helpers, harmless in production)
-  window.__savePoint = { yearData, parseTags, cleanTags, noteMatches, tagCounts, relInfo, libRel, soonList, daysUntil, pickRandom, pickWeight, rndPool, rnd, get state() { return state; }, get covers() { return covers; }, storage, parseBackup, CATALOG, APP_VERSION, covq, cat, catMiss, titleVariants };
+  window.__savePoint = { ui, gameTile, filtersActive, cdText, releaseTs, tickCountdowns, weekDays, backlogList, catOf, searchCatalog, yearData, parseTags, cleanTags, noteMatches, tagCounts, relInfo, libRel, soonList, daysUntil, pickRandom, pickWeight, rndPool, rnd, get state() { return state; }, get covers() { return covers; }, storage, parseBackup, CATALOG, APP_VERSION, covq, cat, catMiss, titleVariants };
   boot();
 })();

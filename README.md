@@ -1,3 +1,37 @@
+## v6.2 – New Library (overhaul part 3 of 3)
+- **List or cover grid**: the button next to the search box switches between the list and a cover-first grid (3 columns, 4 on wider screens). Your choice is remembered. Each tile shows the cover, a ♥ for favorites, ★ rating, a progress ring (a green check ring for finished games), a green dot while a session is running, and a "3d" countdown chip for upcoming Want to play games. The dot by the platform shows the status colour.
+- **Sticky search bar**: search and the status chips (All / Want to Play / Playing / …) stay at the top while you scroll. The Journal's search and filters stay put the same way.
+- **Filters button**: platform, sort, studio and genre now live in a panel opened by the funnel button, which shows a badge with how many are in use. The Library is no longer half filters.
+- Stats, Backup, Journal and sheets pick up the glass look from v6.0; their layouts are unchanged.
+- This completes the three-part overhaul (v6.0 Home + glass, v6.1 game page, v6.2 Library). Not tested on a real iPhone.
+
+## v6.1 – New game page (overhaul part 2 of 3)
+- **Hero** at the top: the cover with a blurred copy of itself as the backdrop (the whole page background takes the cover's colours), plus status, platform, rating, hours played, date added and the release countdown. A **Find cover online** button appears here when the game only has a generated cover.
+- **Quick buttons**: Favorite, Up next (not shown while playing/finished), Share and Edit as one row of glass buttons.
+- **Where I left off**: one pinned line per game (up to 280 characters), e.g. "Chapter 4, before the tower boss". Tap it to edit or clear. It also shows on the Home "Continue playing" card. Saved in backups; older backups import fine. It isn't offered for Finished games.
+- **Collapsible sections**: **Progress & hours** (rating, completion, hours, sessions, started/finished dates) is open by default for started games; **Cover & more** (use my photo, use generated cover, Delete game) is closed. Games still marked Want to play keep the "Not started yet / Start playing" block.
+- **Notes** are a timeline with a line and dots; search and tag filters from v5.2 work as before.
+- Not tested on a real iPhone.
+
+## v6.0 – Liquid glass + new Home (overhaul part 1 of 3)
+- **Glass look** across the whole app: frosted top bar, a floating glass tab bar, glass sheets, translucent cards with a bright top edge. The background is tinted with the colours of the game on the Home hero (generated covers use their palette; real art uses its average colour). Blur is limited to the top bar, tab bar, sheets and the hero, to keep scrolling smooth. If iOS "Reduce Transparency" is on, or blur isn't supported, panels fall back to solid colours.
+- **Home** now has:
+  - **Continue playing** hero: your most recently active Playing game (or your first Up next game) with ▶ Start session / ■ End session right on the card, and a row of your other playing games.
+  - **This week**: hours logged per day for the last 7 days and your streak of days in a row.
+  - **Releasing soon**: a row of covers with a **live countdown** (e.g. `2d 11h 59m 54s`, then `HH:MM:SS` on the last day, then "Out now") for Want to play games with an exact date within 90 days. The game page shows the same live clock. Release dates have no clock time, so the countdown ends at 00:00 your time on release day. It only ticks while the app is open (no notifications).
+  - **Still on your list**: Playing/Paused games untouched for 30+ days, with Pause / Resume.
+  - Up next, Recent notes (3) and "What should I play?" are still there.
+- The hours field on the game page now has the same style as other inputs.
+- Library, game page, Stats and Backup keep their layouts for now; parts 2 and 3 will redesign them.
+- Not tested on a real iPhone, where blur and scrolling speed can differ from desktop Chromium.
+
+## v5.3 – Studio search and filter fix
+- **Why studio search failed before:** a library game only had genres/studios if its title exactly matched the built-in list. Names like "FC 26" or "Elden Ring Deluxe Edition" got nothing. Now short names ("FC 26") and edition suffixes (Deluxe, Ultimate, Complete, Definitive, GOTY…) are matched to the built-in game, so genres, studios and release dates work for them too. Games with truly custom titles still have no studio data.
+- **Library → Studio dropdown** (next to Genre), listing the studios of your own games with counts.
+- **Add games → studio chips** (EA, Nintendo, Sony, Xbox, Ubisoft, Capcom, Square Enix, Bandai Namco, Rockstar, FromSoftware, Konami, Sega, Activision, Bethesda, Take-Two). Tap one to list that studio's games.
+- Typing a studio in the Library search box works as before (`ea`, `rockstar`, `fromsoftware`, `electronic arts`).
+- Studio data was written from general knowledge, not an official database, so some entries may be wrong or missing.
+
 ## v5.2 – Note tags, better search, year in review (part 3 of 3)
 - **Tags on notes**: in the note form add tags separated by commas (e.g. `boss, missable, secret`). Up to 8 per note, lowercase, 24 characters each; your existing tags appear as quick-tap suggestions. Tags show on each note; tap one to open the Journal filtered to it.
 - **Journal**: a row of tag chips with counts, and a smarter search: every word must match somewhere in the note's title, text, tags or game name (`#secret statue`, `hades fast`).
