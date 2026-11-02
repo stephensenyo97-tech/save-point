@@ -573,3 +573,55 @@ input[type=number]:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba
 .ring.done circle.p { stroke: var(--green); }
 .ring i { font-style: normal; font-size: 9.5px; font-weight: 800; position: relative; }
 .ring.done i { color: var(--green); font-size: 12px; }
+
+/* ═════════ v6.3 – Versus sessions ═════════ */
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 4px 0 12px; }
+.row2 .rnd-btn { margin: 0; min-height: 52px; text-align: center; justify-content: center; text-decoration: none; }
+.seg.two { grid-template-columns: 1fr 1fr; }
+.vs-live { display: flex; flex-direction: column; gap: 4px; text-decoration: none; color: inherit; border-color: rgba(52,211,153,.5); background: linear-gradient(150deg, rgba(52,211,153,.18), rgba(255,255,255,.03)), var(--glass-solid); }
+.vs-live span { font-size: 14px; color: var(--muted); }
+.vs-clock { font-variant-numeric: tabular-nums; font-weight: 800; color: var(--green); }
+.vs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-decoration: none; color: inherit; }
+.vs-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.vs-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs-main small { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs-res { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; max-width: 48%; text-align: right; font-size: 13px; font-weight: 700; }
+.rivals { padding: 4px 16px; }
+.rv { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; }
+.rv + .rv { border-top: 1px solid rgba(255,255,255,.08); }
+.rv b { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-rec { text-align: right; font-size: 14px; font-weight: 700; flex: none; }
+.good { color: var(--green); } .bad { color: var(--red); }
+.vs-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0 12px; }
+.vs-board { margin-bottom: 12px; }
+.vs-pl { display: grid; grid-template-columns: minmax(70px, 28%) 1fr auto auto; align-items: center; gap: 10px; padding: 7px 0; }
+.vs-pl .vs-n { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs-pl b { font-size: 24px; min-width: 22px; text-align: right; }
+.vs-pl small { color: var(--muted); font-weight: 700; }
+.vs-pl.lead .hb-t i { background: var(--grad); }
+.vs-team { display: grid; grid-template-columns: repeat(3, 1fr); text-align: center; }
+.vs-team b { display: block; font-size: 34px; line-height: 1.1; }
+.vs-team span { color: var(--muted); font-size: 13px; font-weight: 700; }
+.vs-round .vs-rh { display: flex; justify-content: space-between; align-items: baseline; }
+.vs-round .vs-ra { display: flex; gap: 8px; margin-top: 10px; }
+.vs-scores { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.vs-sc span { display: block; font-size: 13px; font-weight: 700; color: var(--muted); margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs-pick { display: flex; flex-wrap: wrap; gap: 8px; }
+.vs-add { display: flex; gap: 8px; }
+.vs-add input { flex: 1; min-width: 0; }
+.mchip.you { color: var(--green); border-color: rgba(52,211,153,.45); }
+
+/* versus: one-tap score tiles */
+.vs-tap { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.vs-tap.two { grid-template-columns: 1fr 1fr; }
+.vs-tile { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 132px; padding: 12px 8px; border-radius: 20px; border: 1px solid var(--glass-line); background: var(--glass-solid); color: var(--text, inherit); font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; transition: transform .08s ease; }
+.vs-tile:active { transform: scale(.96); }
+.vs-tile span { font-weight: 800; font-size: 16px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs-tile b { font-size: 46px; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.vs-tile em { font-style: normal; font-size: 11.5px; color: var(--muted); font-weight: 700; }
+.vs-tile.lead { border-color: rgba(34,211,238,.6); box-shadow: 0 0 0 1px rgba(34,211,238,.25) inset; }
+.vs-tile.good { border-color: rgba(52,211,153,.5); } .vs-tile.good b { color: var(--green); }
+.vs-tile.bad { border-color: rgba(248,113,113,.5); } .vs-tile.bad b { color: #f87171; }
+.mchip.on { background: rgba(34,211,238,.16); }
+button.rv.lb { width: 100%; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.seg.three { grid-template-columns: repeat(3, 1fr); }

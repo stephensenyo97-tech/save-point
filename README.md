@@ -1,3 +1,25 @@
+## v6.5 – Play with friends part 3: 2v2 teams and share card
+
+- New "2v2" session type: tap four names; the first two are Team A, the next two Team B. Tap a team's tile when it wins.
+- Everyone on a team gets the result in their personal record and the leaderboard. 2v2 is listed as its own game line ("FC 26 (2v2)").
+- Team sessions are not counted in the one-on-one head-to-head card.
+- "📤 Share" on a session makes a score picture. On a phone it opens the share sheet; otherwise it downloads a PNG.
+
+## v6.4 – Play with friends part 2: records
+
+- Leaderboard on the Play with friends page: win rate, W–L–D and current streak for everyone, best first.
+- Tap a name for their full record: overall, best streak, results against each player, and results by game.
+- Co-op wins and losses are shown on the player's page; they don't count toward win rate.
+
+## v6.3 – Play with friends: saved players and one-tap scoring
+
+- Type a name once (say Steven and Henry) and it's saved. Next time, just tap the names. "Same as last time" picks the last group in one tap.
+- Any two or more players; no fixed "You".
+- During a session, tap a player's tile every time they win a game. Draw and Undo last are one tap too. Co-op has "We won" / "We lost".
+- "With scores" still lets you enter points for a game.
+- Head-to-head records for every pair are kept on the Play with friends page, plus a Saved players list (✕ removes a name from quick-pick; past results stay).
+- Saved names and sessions are included in backups. Older backups still import.
+
 ## v6.2 – New Library (overhaul part 3 of 3)
 - **List or cover grid**: the button next to the search box switches between the list and a cover-first grid (3 columns, 4 on wider screens). Your choice is remembered. Each tile shows the cover, a ♥ for favorites, ★ rating, a progress ring (a green check ring for finished games), a green dot while a session is running, and a "3d" countdown chip for upcoming Want to play games. The dot by the platform shows the status colour.
 - **Sticky search bar**: search and the status chips (All / Want to Play / Playing / …) stay at the top while you scroll. The Journal's search and filters stay put the same way.
